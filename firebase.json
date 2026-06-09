@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"getgabs-notif","appId":"1:777015307896:android:f72322f69bd8584c8e078d","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"getgabs-notif","configurations":{"android":"1:777015307896:android:f72322f69bd8584c8e078d","ios":"1:777015307896:ios:db5c0adb40d242ed8e078d"}}}}}}
