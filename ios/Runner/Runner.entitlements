@@ -4,8 +4,6 @@
 <dict>
 	<key>aps-environment</key>
 	<string>production</string>
-
-	<!-- ✅ VoIP calling ke liye (background call delivery) -->
 	
 	<true/>
 </dict>
