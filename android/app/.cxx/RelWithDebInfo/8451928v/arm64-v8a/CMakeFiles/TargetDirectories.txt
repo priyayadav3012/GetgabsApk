@@ -1,0 +1,2 @@
+C:/Users/Dell/Desktop/newgetgabs22may/getgabs_new/android/app/.cxx/RelWithDebInfo/8451928v/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/Dell/Desktop/newgetgabs22may/getgabs_new/android/app/.cxx/RelWithDebInfo/8451928v/arm64-v8a/CMakeFiles/rebuild_cache.dir

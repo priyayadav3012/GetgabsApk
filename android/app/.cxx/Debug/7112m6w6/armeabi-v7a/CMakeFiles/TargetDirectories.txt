@@ -1,0 +1,2 @@
+D:/getgabs_new_21april/getgabs_new/android/app/.cxx/Debug/7112m6w6/armeabi-v7a/CMakeFiles/edit_cache.dir
+D:/getgabs_new_21april/getgabs_new/android/app/.cxx/Debug/7112m6w6/armeabi-v7a/CMakeFiles/rebuild_cache.dir

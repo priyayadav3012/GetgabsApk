@@ -1,0 +1,2 @@
+C:/Users/Dell/Downloads/getgabs_new/android/app/.cxx/RelWithDebInfo/645u71p6/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/Dell/Downloads/getgabs_new/android/app/.cxx/RelWithDebInfo/645u71p6/x86_64/CMakeFiles/rebuild_cache.dir

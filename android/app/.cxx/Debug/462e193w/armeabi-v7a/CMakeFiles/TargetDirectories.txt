@@ -1,0 +1,2 @@
+D:/getgabsmessagedlyapp/getgabs_new/android/app/.cxx/Debug/462e193w/armeabi-v7a/CMakeFiles/edit_cache.dir
+D:/getgabsmessagedlyapp/getgabs_new/android/app/.cxx/Debug/462e193w/armeabi-v7a/CMakeFiles/rebuild_cache.dir

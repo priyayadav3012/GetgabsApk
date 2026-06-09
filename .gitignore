@@ -1,0 +1,96 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Firebase & Sensitive Configuration Files
+# IMPORTANT: These contain API keys and should never be committed
+**/google-services.json
+**/GoogleService-Info.plist
+firebase.json
+firebase1.json
+lib/firebase_options.dart
+
+# Environment variables and secrets
+.env
+.env.*
+*.key
+*.keystore
+*.jks
+
+# iOS Specific
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/App.framework
+ios/Flutter/engine/
+ios/ServiceDefinitions.json
+ios/Runner/GeneratedPluginRegistrant.*
+
+# macOS Specific
+macos/Pods/
+macos/Flutter/ephemeral/
+
+# Android Specific
+/android/.gradle/
+/android/captures/
+/android/local.properties
+/android/key.properties
+/android/.gradletasknamecache
+
+# Coverage
+coverage/
+*.lcov
+
+# Generated files
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+
+# GetX/GetStorage
+*.gs
+
+# Temporary files
+*.tmp
+*.temp
+*.hprof

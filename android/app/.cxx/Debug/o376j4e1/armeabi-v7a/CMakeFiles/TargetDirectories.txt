@@ -1,0 +1,2 @@
+C:/Users/Dell/Desktop/messagedlyapp/newgetgabs22may/getgabs_new/android/app/.cxx/Debug/o376j4e1/armeabi-v7a/CMakeFiles/edit_cache.dir
+C:/Users/Dell/Desktop/messagedlyapp/newgetgabs22may/getgabs_new/android/app/.cxx/Debug/o376j4e1/armeabi-v7a/CMakeFiles/rebuild_cache.dir
