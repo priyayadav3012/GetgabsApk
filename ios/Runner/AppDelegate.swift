@@ -5,6 +5,7 @@ import PushKit
 import UserNotifications
 import CallKit
 import AVFoundation
+import FirebaseMessaging
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate {
@@ -13,8 +14,9 @@ import AVFoundation
     var callChannel: FlutterMethodChannel?
     var currentCallUUID: String?
     
-    // 🔥 Variable to cache token if Flutter requests it late
+    // Caching Variables
     var cachedVoipTokenString: String?
+    var pendingAnsweredCallUUID: String? // 🔥 Stores UUID if Flutter is not yet active
 
     override func application(
         _ application: UIApplication,
@@ -46,7 +48,6 @@ import AVFoundation
                     result(FlutterError(code: "INVALID_ARGUMENTS", message: "UUID missing", details: nil))
                 }
             }
-            // 🔥 NEW: Flutter handles force wake up token queries
             else if call.method == "getVoipTokenForcefully" {
                 print("📡 Flutter requested token forcefully.")
                 if let cachedToken = self?.cachedVoipTokenString {
@@ -57,7 +58,18 @@ import AVFoundation
                     self?.retriggerVoipRegistration()
                 }
                 result(nil)
-            } else {
+            }
+            // 🔥 NEW: Flutter handles force check on boot-up for killed/lock state calls
+            else if call.method == "checkPendingAnsweredCall" {
+                if let pendingUuid = self?.pendingAnsweredCallUUID {
+                    print("🚀 Sending pending answered call to Flutter: \(pendingUuid)")
+                    result(["uuid": pendingUuid])
+                    self?.pendingAnsweredCallUUID = nil // Clear cache after handing over
+                } else {
+                    result(nil) // No pending calls found
+                }
+            }
+            else {
                 result(FlutterMethodNotImplemented)
             }
         }
@@ -72,6 +84,8 @@ import AVFoundation
         if #available(iOS 10.0, *) {
             UNUserNotificationCenter.current().delegate = self
         }
+
+        application.registerForRemoteNotifications()
 
         // ==========================================
         // PUSHKIT SETUP (VoIP Pushes)
@@ -101,7 +115,6 @@ import AVFoundation
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // 🔥 Helper method to force re-register if token is totally empty
     private func retriggerVoipRegistration() {
         voipRegistry = nil
         voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
@@ -114,10 +127,13 @@ import AVFoundation
         let token = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
         print("📲 VoIP Token: \(token)")
         
-        // 🔥 Cache the token safely inside instance memory
         self.cachedVoipTokenString = token
-        
         callChannel?.invokeMethod("onVoipTokenReceived", arguments: token)
+    }
+
+    override func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Messaging.messaging().apnsToken = deviceToken
+        super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
@@ -146,14 +162,13 @@ import AVFoundation
         self.currentCallUUID = uuidString
         print("📞 Processing Incoming Call From: \(callerName) with UUID: \(uuidString)")
 
-        // 🚀 STEP 1: Show native CallKit UI screen instantly
+        // Show CallKit Screen Instantly
         CallManager.shared.reportIncomingCall(uuid: uuid, handle: callerName)
 
-        // 🚀 STEP 2: Tell Apple watchdog that push processing is done immediately
         completion()
         print("✅ Apple push execution lifecycle closed safely.")
 
-        // 🚀 STEP 3: Async dispatch to Flutter
+        // Async dispatch to Flutter (if Flutter is already awake)
         DispatchQueue.main.async { [weak self] in
             self?.callChannel?.invokeMethod(
                 "onIncomingVoipCall",
@@ -183,13 +198,18 @@ import AVFoundation
     @objc private func handleNativeCallAnswered(_ notification: Notification) {
         if let userInfo = notification.userInfo,
            let uuidStr = userInfo["uuid"] as? String {
-            print("📲 Native Call Answered Linker Hooked for UUID: \(uuidStr)")
+            let cleanUuid = uuidStr.lowercased()
+            print("📲 Native Call Answered Linker Hooked for UUID: \(cleanUuid)")
             
-            callChannel?.invokeMethod(
-                "onNativeCallAnswered",
-                arguments: ["uuid": uuidStr.lowercased()]
-            )
-            print("✅ Flutter notified via channel event: onNativeCallAnswered")
+            if let channel = callChannel {
+                // If Flutter engine is completely initialized, invoke channel event
+                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": cleanUuid])
+                print("✅ Flutter notified via channel event: onNativeCallAnswered")
+            } else {
+                // 🔥 CRITICAL CACHE: If app is killed/locked, Flutter channel is nil. Save it!
+                print("⏳ Flutter not ready yet. Caching answered call event for UUID: \(cleanUuid)")
+                self.pendingAnsweredCallUUID = cleanUuid
+            }
         }
     }
 }

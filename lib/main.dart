@@ -74,7 +74,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await prefs.setString('pending_call_session', sessionRaw);
     await prefs.setString('pending_caller_name', callerName);
     await prefs.setString('pending_caller_number', callerNumber);
-    await prefs.setString('pending_from_user_id', message.data['from_user_id'] ?? '');
+    await prefs.setString(
+        'pending_from_user_id', message.data['from_user_id'] ?? '');
 
     // ✅ iOS: UUID required hai CallKit ke liye (string ID reject hoti hai)
     // ✅ Android: UUID safe hai — koi issue nahi
@@ -89,8 +90,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         'https://ui-avatars.com/api/?name=${Uri.encodeComponent(displayForAvatar)}&background=075E54&color=ffffff&size=200&rounded=true&bold=true';
 
     String displayName = callerName.isNotEmpty ? callerName : callerNumber;
-    String displayNameShort =
-        displayName.length > 25 ? '${displayName.substring(0, 25)}...' : displayName;
+    String displayNameShort = displayName.length > 25
+        ? '${displayName.substring(0, 25)}...'
+        : displayName;
 
     final params = CallKitParams(
       id: safeId,
@@ -100,7 +102,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       avatar: avatarUrl,
       type: 0,
       duration: 60000,
-      
+
       // ✅ Android: custom notification styling
       android: const AndroidParams(
         isCustomNotification: true,
@@ -146,6 +148,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       await FlutterCallkitIncoming.endCall(id);
     }
     await _clearCallPrefs(prefs);
+  }
+
+  if (type == 'new_message' || message.notification != null) {
+    debugPrint("📩 Background message received!");
+    
+    // Yahan aapko ek flag set karna hai ki "Naya message aaya hai, list refresh karo"
+    await prefs.setBool('has_new_messages_to_refresh', true);
   }
 }
 
@@ -217,6 +226,11 @@ Future<void> main() async {
 
   await FirebaseMessaging.instance.requestPermission();
 
+  if (Platform.isIOS) {
+    final apnsToken = await FirebaseMessaging.instance.getAPNSToken();
+    print('🔑 Startup APNS token: $apnsToken');
+  }
+
   // ✅ CallKit notification permission
   await FlutterCallkitIncoming.requestNotificationPermission({
     'title': 'Notification permission',
@@ -227,9 +241,9 @@ Future<void> main() async {
 
   // ✅ Android file mein tha — CallKit events setup
   WhatsAppCallingConfig.setupCallKitEvents();
-  
 
-  await _initGlobalCalling();WhatsAppCallingConfig.initMethodChannel();
+  await _initGlobalCalling();
+  WhatsAppCallingConfig.initMethodChannel();
 
   runApp(const MyApp());
 }
@@ -255,7 +269,6 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-
   @override
   void initState() {
     super.initState();
@@ -388,7 +401,9 @@ void configLoading() {
 
 void showLoading() {
   EasyLoading.show(
-      status: 'Loading...', maskType: EasyLoadingMaskType.black, dismissOnTap: false);
+      status: 'Loading...',
+      maskType: EasyLoadingMaskType.black,
+      dismissOnTap: false);
 }
 
 void hideLoading() => EasyLoading.dismiss();

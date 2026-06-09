@@ -1485,7 +1485,46 @@ class GlobalCallListenerService {
       transition: Transition.fadeIn,
     )?.then((_) => _callScreenOpen = false);
   }
+// --- Insert into GlobalCallListenerService class ---
+Future<bool> _waitForSocketConnected(WhatsAppCallingService svc, {int timeoutMs = 12000}) async {
+  const int stepMs = 300;
+  int waited = 0;
 
+  // ensure socket exists and attempt connect
+  try {
+    if (svc.socket == null) {
+      await svc.initialize();
+    } else {
+      svc.socket?.connect();
+    }
+  } catch (_) {}
+
+  while ((svc.socket == null || svc.socket!.connected != true) && waited < timeoutMs) {
+    await Future.delayed(Duration(milliseconds: stepMs));
+    waited += stepMs;
+  }
+
+  return svc.socket?.connected == true;
+}
+
+Future<void> _quickAcceptToServer(String callId, int userId, String apiKey) async {
+  try {
+    final resp = await http.post(
+      Uri.parse('${WhatsAppCallingService.socketUrl}/accept-whatsapp-call'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'callId': callId,
+        'acceptedBy': userId,
+        'api_key': apiKey,
+        'quickAccept': true
+      }),
+    ).timeout(const Duration(seconds: 8));
+
+    debugPrint('🔔 quickAccept response: ${resp.statusCode} ${resp.body}');
+  } catch (e) {
+    debugPrint('❌ quickAccept failed: $e');
+  }
+}
   Future<void> initialize({
     required int userId,
     required int adminId,
@@ -1582,25 +1621,48 @@ class GlobalCallListenerService {
             'callerName': callerName,
             'avatar': avatar,
           });
-          if (_service?.socket?.connected != true) {
-            _service?.socket?.connect();
-            await Future.delayed(const Duration(seconds: 2));
-          }
-          if (!(_service?.callAccepted ?? false)) {
-            try {
-              await _service?.answerCall();
-              debugPrint('✅ Call answered in background');
-            } catch (e) {
-              debugPrint('❌ Background answerCall error: $e');
-            }
-          }
+          // if (_service?.socket?.connected != true) {
+          //   _service?.socket?.connect();
+          //   await Future.delayed(const Duration(seconds: 2));
+          // }
+          // if (!(_service?.callAccepted ?? false)) {
+          //   try {
+          //     await _service?.answerCall();
+          //     debugPrint('✅ Call answered in background');
+          //   } catch (e) {
+          //     debugPrint('❌ Background answerCall error: $e');
+          //   }
+          // }
+        
+         bool connected = false;
+  try {
+    connected = await _waitForSocketConnected(_service!, timeoutMs: 12000);
+  } catch (e) {
+    debugPrint('🔎 waitForSocket error: $e');
+    connected = false;
+  }
+
+  if (connected) {
+    debugPrint('✅ Socket connected — attempting background answer');
+    if (!(_service?.callAccepted ?? false)) {
+      try {
+        await _service?.answerCall();
+        debugPrint('✅ Call answered in background via socket');
+      } catch (e) {
+        debugPrint('❌ Background answerCall error (socket): $e — falling back to quickAccept');
+        await _quickAcceptToServer(callId, bgUserId, bgApiKey);
+      }
+    }
+  } else {
+    debugPrint('⏳ Socket not connected within timeout — performing quickAccept fallback');
+    await _quickAcceptToServer(callId, bgUserId, bgApiKey);
+    // UI and full SDP exchange will finish when app foregrounds.
+  }
+}
+        
         }
 
-      } else if (event is CallEventActionCallDecline) {
-        debugPrint('📞 Call Declined');
-        await _service?.terminateCall();
-
-      } else if (event is CallEventActionCallTimeout) {
+      else if (event is CallEventActionCallTimeout) {
         debugPrint('📞 Call Timeout');
         await _service?.terminateCall();
 

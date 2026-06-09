@@ -2,6 +2,10 @@
 
 A new Flutter project.
 
+## Documentation
+
+- [Implemented features overview](docs/implemented-features.md)
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.

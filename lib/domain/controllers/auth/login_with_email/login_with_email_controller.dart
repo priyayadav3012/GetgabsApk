@@ -14,8 +14,8 @@ import 'package:getgabs/routes/app_route.dart';
 import '../../../../main.dart';
 import '../../../services/remote_services/remote_auth_service.dart';
 
-class LoginWithEmailController extends GetxController with GetTickerProviderStateMixin {
-
+class LoginWithEmailController extends GetxController
+    with GetTickerProviderStateMixin {
   // ✅ Flavor — Android + iOS dono ke liye
   static const String currentFlavor =
       String.fromEnvironment('FLUTTER_APP_FLAVOR');
@@ -32,24 +32,25 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
   final FocusNode focusNode = FocusNode();
 
   // Form
-  final formKey      = GlobalKey<FormState>();
-  final emailCtrl    = TextEditingController();
+  final formKey = GlobalKey<FormState>();
+  final emailCtrl = TextEditingController();
   final passwordCtrl = TextEditingController();
-  final emailFocus   = FocusNode();
-  final pwFocus      = FocusNode();
-  final obscure      = true.obs;
+  final emailFocus = FocusNode();
+  final pwFocus = FocusNode();
+  final obscure = true.obs;
 
   // Animations
   late final AnimationController blobCtrl;
-  late final Animation<double>   blobAnim;
+  late final Animation<double> blobAnim;
   late final AnimationController entryCtrl;
 
   // ✅ iOS: Native VoIP channel + token
   // Android pe yeh channel exist nahi karta — Platform check se guard kiya hai
-  final MethodChannel _customCallChannel = const MethodChannel('com.getgabs/calls');
+  final MethodChannel _customCallChannel =
+      const MethodChannel('com.getgabs/calls');
   String? iOSNativeVoipToken;
 
-  final ChatServices chatServices       = ChatServices();
+  final ChatServices chatServices = ChatServices();
   final RemoteAuthService remoteAuthService = RemoteAuthService();
   String name = "";
   RxBool changeButton = false.obs;
@@ -62,17 +63,17 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
       isFocused.value = focusNode.hasFocus;
     });
 
- if (Platform.isIOS) {
-  _customCallChannel.setMethodCallHandler((call) async {
-    if (call.method == 'onVoipTokenReceived') {
-      iOSNativeVoipToken = call.arguments.toString();
-      print('🚀 VoIP Token: $iOSNativeVoipToken');
+    if (Platform.isIOS) {
+      _customCallChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onVoipTokenReceived') {
+          iOSNativeVoipToken = call.arguments.toString();
+          print('🚀 VoIP Token: $iOSNativeVoipToken');
+        }
+      });
     }
-  });
-}
-    blobCtrl = AnimationController(
-        vsync: this, duration: const Duration(seconds: 8))
-      ..repeat(reverse: true);
+    blobCtrl =
+        AnimationController(vsync: this, duration: const Duration(seconds: 8))
+          ..repeat(reverse: true);
     blobAnim = CurvedAnimation(parent: blobCtrl, curve: Curves.easeInOut);
 
     entryCtrl = AnimationController(
@@ -123,7 +124,11 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
         int retryCount = 0;
 
         while (apnsToken == null && retryCount < 5) {
-          apnsToken = await firebaseMessaging.getAPNSToken();
+          try {
+            apnsToken = await firebaseMessaging.getAPNSToken();
+          } catch (e) {
+            print('Error fetching APNS Token: $e');
+          }
           if (apnsToken == null) {
             retryCount++;
             print('⏳ APNS Token nahi mila, retry: $retryCount');
@@ -132,16 +137,16 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
         }
 
         if (apnsToken == null) {
-          print('❌ APNS Token 5 retries ke baad bhi nahi mila');
-          return '';
+          print(
+              '❌ APNS Token 5 retries ke baad bhi nahi mila — continuing with FCM token if available');
+        } else {
+          print('✅ APNS Token confirmed: $apnsToken');
         }
-        print('✅ APNS Token confirmed: $apnsToken');
       }
 
       final token = await firebaseMessaging.getToken();
       print('device token: $token');
       return token ?? '';
-
     } catch (e) {
       print('Error fetching FCM Token: $e');
       return '';
@@ -158,16 +163,29 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
       final fcmToken = await getDeviceToken();
 
       if (Platform.isIOS) {
-        final voipToken = iOSNativeVoipToken;
+        String? voipToken = iOSNativeVoipToken;
         print('--- iOS TOKEN SYNC ---');
         print('FCM Token: $fcmToken');
         print('VoIP Token: $voipToken');
+
+        if (voipToken == null || voipToken.isEmpty) {
+          try {
+            print('📡 Requesting cached VoIP token from native iOS side...');
+            await _customCallChannel.invokeMethod('getVoipTokenForcefully');
+            await Future.delayed(const Duration(milliseconds: 300));
+            voipToken = iOSNativeVoipToken;
+            print('📡 VoIP token after force request: $voipToken');
+          } catch (e) {
+            print('Error requesting VoIP token forcefully: $e');
+          }
+        }
 
         if (voipToken != null && voipToken.isNotEmpty) {
           final tokenData = {
             'user_id': int.tryParse(userId) ?? 0,
             'fcm_token': fcmToken,
             'voip_token': voipToken,
+            'api_key': tokenKey,
           };
           remoteAuthService.saveVoipTokenService(tokenData, tokenKey).then((r) {
             print('Token sync response: $r');
@@ -177,7 +195,6 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
         } else {
           print('⚠️ VoIP token abhi nahi mila — sync skipped');
         }
-
       } else {
         // ✅ Android: sirf FCM token sync
         print('--- Android TOKEN SYNC ---');
@@ -193,17 +210,13 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
   // ANIMATION HELPERS
   // ============================================
   Animation<double> opacity(double from, double to) =>
-      Tween<double>(begin: 0, end: 1).animate(
-          CurvedAnimation(
-              parent: entryCtrl,
-              curve: Interval(from, to, curve: Curves.easeOut)));
+      Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
+          parent: entryCtrl, curve: Interval(from, to, curve: Curves.easeOut)));
 
   Animation<Offset> offset(double from, double to,
-      {Offset start = const Offset(0, 0.22)}) =>
-      Tween<Offset>(begin: start, end: Offset.zero).animate(
-          CurvedAnimation(
-              parent: entryCtrl,
-              curve: Interval(from, to, curve: Curves.easeOut)));
+          {Offset start = const Offset(0, 0.22)}) =>
+      Tween<Offset>(begin: start, end: Offset.zero).animate(CurvedAnimation(
+          parent: entryCtrl, curve: Interval(from, to, curve: Curves.easeOut)));
 
   // ============================================
   // LOGIN API
@@ -233,8 +246,8 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
         EasyLoading.dismiss();
         print('Login successful for flavor: $currentFlavor');
 
-        final extractedApiKey = value['message']['data']['facebook_details']
-                ?[0]?['api_key']
+        final extractedApiKey = value['message']['data']['facebook_details']?[0]
+                    ?['api_key']
                 ?.toString() ??
             '';
 
@@ -243,7 +256,7 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
                 value['message']['data'], value['message']['data']['id'])
             .then((_) {
           userData.getLoggedInUserId().then((userId) {
-            if (userId != null) {
+            if (userId > 0) {
               // ✅ iOS: VoIP + FCM sync
               // ✅ Android: FCM only (voip skip hoga)
               syncDeviceTokensToServer(userId.toString(), extractedApiKey);

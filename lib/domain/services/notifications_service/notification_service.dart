@@ -43,7 +43,8 @@ class NotificationService {
 
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
       print("User granted permission");
-    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
+    } else if (settings.authorizationStatus ==
+        AuthorizationStatus.provisional) {
       print("User granted provisional permission");
     } else {
       AppSettings.openAppSettings();
@@ -103,7 +104,7 @@ class NotificationService {
 
       print(value);
       String baseTopicSuffix;
-     switch (role) {
+      switch (role) {
         case 'user':
           baseTopicSuffix = "user$id";
           break;
@@ -139,8 +140,8 @@ class NotificationService {
       final privilege = value['user_privilage'];
 
       // ✅ Flavor prefix — dono apps ke topics alag
-          String baseTopicSuffix;
-     switch (role) {
+      String baseTopicSuffix;
+      switch (role) {
         case 'user':
           baseTopicSuffix = "user$id";
           break;
@@ -160,6 +161,23 @@ class NotificationService {
     }
   }
 
+  Future<bool> _isApnsTokenAvailable() async {
+    if (!Platform.isIOS) return true;
+
+    try {
+      final apnsToken = await firebaseMessaging.getAPNSToken();
+      if (apnsToken == null || apnsToken.isEmpty) {
+        print("⚠️ APNS token not set yet before unsubscribe.");
+        return false;
+      }
+      print("✅ APNS token available before unsubscribe: $apnsToken");
+      return true;
+    } catch (e) {
+      print("⚠️ APNS token check failed before unsubscribe: $e");
+      return false;
+    }
+  }
+
   // ============================================
   // UNSUBSCRIBE FROM TOPIC
   // ============================================
@@ -173,6 +191,17 @@ class NotificationService {
         return;
       }
 
+      if (Platform.isIOS) {
+        final apnsReady = await _isApnsTokenAvailable();
+        if (!apnsReady) {
+          print(
+              "⚠️ Skipping unsubscribeFromTopic on iOS because APNS token is not ready.");
+          userData.clearAllData();
+          Get.offAllNamed(AppRoute.loginWithEmail);
+          return;
+        }
+      }
+
       print("📡 Unsubscribing from: $topic");
       await firebaseMessaging.unsubscribeFromTopic(topic);
       print("✅ UNSUBSCRIBED FROM TOPIC: $topic");
@@ -181,6 +210,8 @@ class NotificationService {
       Get.offAllNamed(AppRoute.loginWithEmail);
     } catch (e) {
       print("❌ [onUnsubscribeTopic] Error: $e");
+      userData.clearAllData();
+      Get.offAllNamed(AppRoute.loginWithEmail);
     }
   }
 
@@ -222,37 +253,36 @@ class NotificationService {
   // ============================================
   // FIREBASE INIT — FOREGROUND MESSAGES
   // ============================================
- void firebaseInit() {
-  FirebaseMessaging.onMessage.listen((message) async {
-
-    final msgType = message.data['type'] ?? '';
-    if (msgType == 'incoming_call' || msgType == 'call_terminated') {
-      debugPrint('📞 Call notification — skipping');
-      return;
-    }
-
-    if (Platform.isIOS) {
-      iosForegroundMessage();
-      return;
-    }
-
-    if (Platform.isAndroid) {
-      
-      // ✅ KEY FIX — notification block present hai
-      // toh Android OS already show kar dega
-      // hum dobara show nahi karenge = double band
-      if (message.notification != null) {
-        debugPrint('⏭️ Skipping — Android OS will show automatically');
+  void firebaseInit() {
+    FirebaseMessaging.onMessage.listen((message) async {
+      final msgType = message.data['type'] ?? '';
+      if (msgType == 'incoming_call' || msgType == 'call_terminated') {
+        debugPrint('📞 Call notification — skipping');
         return;
       }
 
-      // Sirf data-only messages pe manually show karo
-      if (message.data.isNotEmpty) {
-        showNotification(message);
+      if (Platform.isIOS) {
+        iosForegroundMessage();
+        return;
       }
-    }
-  });
-} // ============================================
+
+      if (Platform.isAndroid) {
+        // ✅ KEY FIX — notification block present hai
+        // toh Android OS already show kar dega
+        // hum dobara show nahi karenge = double band
+        if (message.notification != null) {
+          debugPrint('⏭️ Skipping — Android OS will show automatically');
+          return;
+        }
+
+        // Sirf data-only messages pe manually show karo
+        if (message.data.isNotEmpty) {
+          showNotification(message);
+        }
+      }
+    });
+  } // ============================================
+
   // BACKGROUND / TERMINATED MESSAGE HANDLER
   // ============================================
   Future<void> setupInteractMessage() async {
@@ -433,10 +463,12 @@ class NotificationService {
               userKey: profile.profileWaKey, from: 'outside');
         }
       } else {
-        print("MessagesPageController not found, navigating to new MessagesPage.");
+        print(
+            "MessagesPageController not found, navigating to new MessagesPage.");
       }
     } else {
-      print("Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
+      print(
+          "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
       Get.to(() =>
           MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
     }
@@ -446,7 +478,8 @@ class NotificationService {
   // iOS FOREGROUND MESSAGE SETTINGS
   // ============================================
   void iosForegroundMessage() async {
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-        alert: true, badge: true, sound: true);
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+            alert: true, badge: true, sound: true);
   }
 }
