@@ -1,6 +1,7 @@
 // File: lib/domain/services/notifications_service/notification_service.dart
 // ✅ UNIFIED FILE — Works for both Android & iOS
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:app_settings/app_settings.dart';
 import 'package:dio/dio.dart';
@@ -14,7 +15,6 @@ import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_emai
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
-import 'package:getgabs/ui/pages/dashboard/dashboard.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../routes/app_route.dart';
@@ -24,6 +24,7 @@ class NotificationService {
   FirebaseMessaging firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
+  bool _localNotificationsInitialized = false;
   var role = ' '.obs;
   var id = ' '.obs;
   var user_privilage = ' '.obs;
@@ -57,7 +58,11 @@ class NotificationService {
   // ✅ Android: flavor-aware notification icon
   // ✅ iOS: DarwinInitializationSettings
   // ============================================
-  void initLocalNotifications(RemoteMessage message) async {
+  Future<void> initLocalNotifications() async {
+    if (_localNotificationsInitialized) {
+      return;
+    }
+
     // ✅ Android: Messagedly flavor ke liye alag icon
     // ✅ iOS: Android icon relevant nahi — default use hoga
     final String notificationIcon =
@@ -74,16 +79,29 @@ class NotificationService {
 
     await _flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
-      onDidReceiveNotificationResponse: (payload) {
-        print('hi this is it');
-        if (message.data.containsKey('profile_wa_key')) {
-          var profile = createProfileFromMessage(message);
-          handleMessage(message, profile: profile);
-        } else {
-          print("No profile data in notification");
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload == null || payload.isEmpty) {
+          print("No notification payload received.");
+          return;
+        }
+
+        try {
+          final decodedPayload = jsonDecode(payload);
+          if (decodedPayload is Map<String, dynamic> &&
+              decodedPayload.containsKey('profile_wa_key')) {
+            final profile = createProfileFromData(decodedPayload);
+            handleProfileNavigation(profile);
+          } else {
+            print("No profile data in notification");
+          }
+        } catch (e) {
+          print("Failed to decode notification payload: $e");
         }
       },
     );
+
+    _localNotificationsInitialized = true;
   }
 
   // ============================================
@@ -218,9 +236,7 @@ class NotificationService {
   // ============================================
   // CREATE PROFILE FROM MESSAGE
   // ============================================
-  Profile createProfileFromMessage(RemoteMessage message) {
-    Map<String, dynamic> data = message.data;
-
+  Profile createProfileFromData(Map<String, dynamic> data) {
     String? profileWaKey = data['profile_wa_key'];
     String? profileWaId = data["profile_wa_id"];
     String? getPendingMsgCount = data["getpandingmsg_count"];
@@ -248,6 +264,39 @@ class NotificationService {
       updatedTime: updatedTime ?? "",
       hasVoiceCallingPermission: hasVoiceCallingPermissionBool,
     );
+  }
+
+  Profile createProfileFromMessage(RemoteMessage message) {
+    return createProfileFromData(message.data);
+  }
+
+  void handleProfileNavigation(Profile profile) {
+    if (Get.currentRoute.contains('/MessagesPage')) {
+      final MessagesPageController? messagesPageController =
+          Get.isRegistered<MessagesPageController>()
+              ? Get.find<MessagesPageController>()
+              : null;
+
+      if (messagesPageController != null) {
+        if (messagesPageController.profileWaKey != profile.profileWaKey) {
+          messagesPageController.profileWaId = profile.profileWaId;
+          messagesPageController.profileWaKey = profile.profileWaKey;
+          messagesPageController.messageChatList.clear();
+          messagesPageController.userProfile.value = profile;
+          messagesPageController.currentPage.value = 1;
+          messagesPageController.loadChatsApi(
+              userKey: profile.profileWaKey, from: 'outside');
+        }
+      } else {
+        print(
+            "MessagesPageController not found, navigating to new MessagesPage.");
+      }
+    } else {
+      print(
+          "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
+      Get.to(() =>
+          MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
+    }
   }
 
   // ============================================
@@ -291,7 +340,7 @@ class NotificationService {
       if (message.data.containsKey('profile_wa_key')) {
         print('fire notifcationssssssssssss');
         var profile = createProfileFromMessage(message);
-        handleMessage(message, profile: profile);
+        handleProfileNavigation(profile);
       } else {
         print("Topic Notification received without profile data");
       }
@@ -310,8 +359,7 @@ class NotificationService {
         }
         if (message.data.containsKey('profile_wa_key')) {
           var profile = createProfileFromMessage(message);
-          Get.to(() => MessagesPage(
-              profile: profile, profileWaKey: profile.profileWaKey));
+          handleProfileNavigation(profile);
         } else {
           print("Topic Notification received without profile data");
         }
@@ -357,7 +405,8 @@ class NotificationService {
         DateTime.now().millisecondsSinceEpoch ~/ 1000,
         message.notification!.title,
         message.notification!.body,
-        notificationDetails);
+        notificationDetails,
+        payload: jsonEncode(message.data));
   }
 
   // ============================================
@@ -440,38 +489,6 @@ class NotificationService {
     print(accessToken);
     print("device token: $token");
     return token ?? 'no_token_available';
-  }
-
-  // ============================================
-  // HANDLE MESSAGE NAVIGATION
-  // ============================================
-  void handleMessage(RemoteMessage message, {required Profile profile}) async {
-    if (Get.currentRoute.contains('/MessagesPage')) {
-      final MessagesPageController? messagesPageController =
-          Get.isRegistered<MessagesPageController>()
-              ? Get.find<MessagesPageController>()
-              : null;
-
-      if (messagesPageController != null) {
-        if (messagesPageController.profileWaKey != profile.profileWaKey) {
-          messagesPageController.profileWaId = profile.profileWaId;
-          messagesPageController.profileWaKey = profile.profileWaKey;
-          messagesPageController.messageChatList.clear();
-          messagesPageController.userProfile.value = profile;
-          messagesPageController.currentPage.value = 1;
-          messagesPageController.loadChatsApi(
-              userKey: profile.profileWaKey, from: 'outside');
-        }
-      } else {
-        print(
-            "MessagesPageController not found, navigating to new MessagesPage.");
-      }
-    } else {
-      print(
-          "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
-      Get.to(() =>
-          MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
-    }
   }
 
   // ============================================

@@ -52,13 +52,13 @@ class DashboardController extends GetxController {
       debugPrint('📱 Call listener already initialized');
       return;
     }
-    
+
     debugPrint('📱 Initializing call listener from Dashboard...');
-    
+
     try {
       await WhatsAppCallingConfig.initializeCallListener();
       _callListenerInitialized = true;
-      
+
       if (WhatsAppCallingConfig.isCallListenerActive()) {
         debugPrint('✅ Call listener is ACTIVE - Ready for incoming calls');
       } else {
@@ -72,23 +72,24 @@ class DashboardController extends GetxController {
   @override
   void onInit() async {
     super.onInit();
-    
+
     // Initialize call listener for incoming calls
     initCallListener();
-    
+
     dashScrollController.addListener(_scrollListener);
     rollingOverScrollController.addListener(_rollingOverScrollListner);
     Get.put(SocketsController());
-    
+
     focusNode.addListener(() {
       isSearching.value = focusNode.hasFocus;
     });
 
     notificationService.requestNotificationPermission();
+    await notificationService.initLocalNotifications();
     notificationService.getDeviceToken();
     notificationService.setupInteractMessage();
     notificationService.onInitTopic();
-    
+
     activeChatListApi();
     rollingOverChatListApi();
   }
@@ -158,7 +159,7 @@ class DashboardController extends GetxController {
 
 //   isChatPageLoading.value = true;
 //   // isApiCallInProgress.value = true;
-  
+
 //       debugPrint("Updated Chat List ${isChatPageLoading.value}");
 
 //   try {
@@ -261,7 +262,7 @@ class DashboardController extends GetxController {
 //   }
 // }
   var isChatPageLoading = false.obs;
-  
+
   Future<void> activeChatListApi({String increment = 'add'}) async {
     debugPrint('Active Chat List API called with increment: $increment');
     isChatPageLoading.value = true;
@@ -291,8 +292,8 @@ class DashboardController extends GetxController {
 
       chatServices.activeChatList(data, headers: headers).then((value) {
         if (value['status']) {
-          
-    debugPrint('Active Chat List API called with pppppppppppppppppppppppppppppp: $increment');
+          debugPrint(
+              'Active Chat List API called with pppppppppppppppppppppppppppppp: $increment');
           EasyLoading.dismiss();
           List<dynamic> profileData = value['message']['data']['data'] ?? [];
           debugPrint('Received profile data: ${profileData.toString()}');
@@ -397,37 +398,34 @@ class DashboardController extends GetxController {
       EasyLoading.dismiss();
     }
   }
-  
 
   Timer? _searchDebounce;
 
   String _lastSearch = '';
 
   void onSearchChanged(String value) {
-
     _searchDebounce?.cancel();
 
     _searchDebounce = Timer(const Duration(milliseconds: 600), () async {
-
       final trimmed = value.trim();
 
-       if (value.trim().isEmpty) {
-          isSearching.value = false;
-          /// reload original list
-          if (tabBarIndex == 0) {
-            await refreshActiveChatList(
-              increment: 'replace',
-            );
-          } else {
-            await refreshRollingOverChatList(
-              increment: 'replace',
-            );
-          }
-          return;
+      if (value.trim().isEmpty) {
+        isSearching.value = false;
+
+        /// reload original list
+        if (tabBarIndex == 0) {
+          await refreshActiveChatList(
+            increment: 'replace',
+          );
+        } else {
+          await refreshRollingOverChatList(
+            increment: 'replace',
+          );
         }
+        return;
+      }
 
       if (trimmed.length >= 3 && trimmed != _lastSearch) {
-
         _lastSearch = trimmed;
 
         if (tabBarIndex == 0) {
@@ -439,9 +437,7 @@ class DashboardController extends GetxController {
             barIndex: 1,
           );
         }
-
       }
-
     });
   }
 
