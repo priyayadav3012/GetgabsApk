@@ -50,6 +50,10 @@ class WhatsAppCallingService {
   bool _isCallActive = false;
   bool get isCallActive => _isCallActive;
 
+  // Timestamp when we last started answering a call (used to ignore
+  // spurious/early CallEnded events fired immediately after answering).
+  DateTime? lastAnsweredAt;
+
   // ✅ Call accept ho gaya — socket event ignore karo
   bool _callAccepted = false;
   bool get callAccepted => _callAccepted;
@@ -118,6 +122,30 @@ class WhatsAppCallingService {
     required this.userRole,
     required this.businessApiKey,
   });
+
+  Future<void> _safeEndCall(String? callkitId) async {
+    if (callkitId == null || callkitId.isEmpty) return;
+    try {
+      final activeCalls = await FlutterCallkitIncoming.activeCalls();
+      final exists = activeCalls.any((c) {
+      try {
+          final dyn = c as dynamic;
+          final idStr = (dyn is Map) ? (dyn['id']?.toString() ?? '') : (dyn.id?.toString() ?? '');
+          return idStr.toLowerCase() == callkitId.toLowerCase();
+        } catch (e) {
+          return false;
+        }
+      });
+      if (exists) {
+        debugPrint('✅ Ending CallKit call: $callkitId');
+        await FlutterCallkitIncoming.endCall(callkitId);
+      } else {
+        debugPrint('ℹ️ Skip endCall — call not active: $callkitId');
+      }
+    } catch (e) {
+      debugPrint('❌ _safeEndCall error: $e');
+    }
+  }
 
   String? get pendingSdp => _pendingSdp;
   String? get pendingCallId => _pendingCallId;
@@ -527,11 +555,13 @@ class WhatsAppCallingService {
     Future.delayed(const Duration(seconds: 65), () => _callKitShowing = false);
   }
 
+  
+  
   Future<void> _startRingtone() async {
     if (_isRinging) return;
     _isRinging = true;
     try {
-      if (await Vibration.hasVibrator() ?? false) {
+      if (await Vibration.hasVibrator()) {
         Vibration.vibrate(pattern: [0, 1000, 500, 1000, 500, 1000], repeat: 2);
       }
       _ringtonePlayer = AudioPlayer();
@@ -742,6 +772,18 @@ class WhatsAppCallingService {
       debugPrint('⚠️ CALL ALREADY ACCEPTED');
       return;
     }
+if (socket == null || !socket!.connected) {
+    debugPrint('🔌 Socket not connected — connecting...');
+    socket?.connect();
+    int attempts = 0;
+    while (!(socket?.connected ?? false) && attempts < 30) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      attempts++;
+    }
+    debugPrint('Socket connected after ${attempts * 200}ms: ${socket?.connected}');
+  }
+    // mark the answer start time to avoid immediate CallEnded race
+    lastAnsweredAt = DateTime.now();
 
     if (!_hasActivePendingCall || _pendingSdp == null || _pendingCallId == null) {
       throw Exception('No active incoming call');
@@ -781,12 +823,23 @@ class WhatsAppCallingService {
         'acceptedBy': userId,
       }),
     ).timeout(const Duration(seconds: 15));
+    // Log response for debugging APNS/server behavior
+    try {
+      debugPrint('📡 answerCall response: ${response.statusCode}');
+      debugPrint('📡 answerCall body: ${response.body}');
+    } catch (e) {}
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to answer: ${response.statusCode}');
+      String body = '';
+      try {
+        body = response.body;
+      } catch (_) {}
+      throw Exception('Failed to answer: ${response.statusCode} - $body');
     }
 
-    _updateStatus('Connected');
+
+
+    _updateStatus('Connected'); 
     callStartTime = DateTime.now();
     await _logCallStart();
   }
@@ -1525,10 +1578,11 @@ class GlobalCallListenerService {
     // CALLKIT EVENT LISTENER
     // ============================================
     _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
-      debugPrint('📞 CallKit EVENT: $event');
+      try {
+        debugPrint('📞 CallKit EVENT: $event');
 
-      // ✅ v3.0.0 — sealed class pattern (Event enum removed)
-      if (event is CallEventActionCallAccept) {
+        // ✅ v3.0.0 — sealed class pattern (Event enum removed)
+        if (event is CallEventActionCallAccept) {
         debugPrint('📞 ACCEPT CLICKED');
 
         final prefs = await SharedPreferences.getInstance();
@@ -1604,16 +1658,63 @@ class GlobalCallListenerService {
         debugPrint('📞 Call Timeout');
         await _service?.terminateCall();
 
-      } else if (event is CallEventActionCallEnded) {
-        debugPrint('📞 Call Ended');
-        await _service?.cleanupCall();
+      // } else if (event is CallEventActionCallEnded) {
+      //   try {
+      //     final endedId = event.id;
+      //     debugPrint('📞 Call Ended event for id: $endedId');
+      //     // Ignore CallEnded events that arrive immediately after we answered
+      //     // to prevent premature cleanup due to race conditions.
+      //     final last = _service?.lastAnsweredAt;
+      //     if (last != null && DateTime.now().difference(last).inSeconds <= 5) {
+      //       debugPrint('ℹ️ Ignoring CallEnded — recent accept at $last');
+      //       return;
+      //     }
+      //     final prefs = await SharedPreferences.getInstance();
+      //     final storedCallkitId = prefs.getString('pending_callkit_id');
+      //     final currentId = _service?.currentCallKitId;
 
+      //     // Only cleanup if the ended event matches our known callkit id
+      //     if (endedId == currentId || endedId == storedCallkitId || (currentId != null && currentId == storedCallkitId)) {
+      //       debugPrint('🧹 Matching CallEnded — cleaning up');
+      //       await _service?.cleanupCall();
+      //     } else {
+      //       debugPrint('ℹ️ CallEnded for unknown id — ignoring');
+      //     }
+      //   } catch (e) {
+      //     debugPrint('❌ Error handling CallEnded: $e');
+      //   }
+
+      }else if (event is CallEventActionCallEnded) {
+  final last = _service?.lastAnsweredAt;
+  // 5 se 15 seconds karo — iOS ka spurious event kabhi kabhi late aata hai
+  if (last != null && DateTime.now().difference(last).inSeconds <= 15) {
+    debugPrint('ℹ️ Ignoring spurious CallEnded after accept');
+    return;
+  }
+  
+  // Sirf tab cleanup karo jab call actually active na ho
+  if (_service?.isCallActive == true) {
+    debugPrint('ℹ️ Ignoring CallEnded — call still active');
+    return;
+  }
+  
+  await _service?.cleanupCall();
+
+      
       } else if (event is CallEventActionCallToggleAudioSession) {
         debugPrint('📞 Audio session toggled');
 
       } else {
         debugPrint('📞 Unhandled CallKit event: $event');
       }
+      } catch (e, st) {
+        debugPrint('❌ CallKit event handler error: $e');
+        debugPrint('$st');
+      }
+    }, onError: (e, st) {
+      debugPrint('❌ CallKit stream error (global listener): $e');
+      debugPrint('$st');
+      // Swallow plugin parsing errors (e.g., FormatException: id is null)
     });
 
     _isInitialized = true;

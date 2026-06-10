@@ -63,8 +63,8 @@ class WhatsAppCallingConfig {
   static const String _socketUrl = 'https://calling.getgabs.com';
 
   // ✅ iOS ke liye MethodChannel — native CallKit answer handle karta hai
-  static const platform =
-      MethodChannel('com.getgabs.whatsappcalling/channel');
+  // Use the same channel name as native AppDelegate: 'com.getgabs/calls'
+  static const platform = MethodChannel('com.getgabs/calls');
 
   static Map<String, dynamic>? _pendingNavigation;
 
@@ -88,7 +88,7 @@ class WhatsAppCallingConfig {
   // iOS — Native MethodChannel init
   // Android pe yeh call mat karo (Platform check se handle hoga)
   // ============================================
- static void initMethodChannel() {
+ static Future<void> initMethodChannel() async {
   if (!Platform.isIOS) return;
 
   FlutterCallkitIncoming.endAllCalls();
@@ -106,37 +106,68 @@ class WhatsAppCallingConfig {
 
       // ✅ VoIP Push aaya — SDP SharedPrefs mein save karo
       case 'onIncomingVoipCall':
-        final args = call.arguments as Map?;
-        final callerName = args?['callerName'] as String? ?? 'Unknown';
-        final uuid = args?['uuid'] as String? ?? '';
-        debugPrint('📞 Incoming VoIP: $callerName');
-
-        final prefs = await SharedPreferences.getInstance();
-        final sessionStr = prefs.getString('pending_call_session') ?? '';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
-        final callId = prefs.getString('pending_call_id') ?? uuid;
-
-        if (sessionStr.isEmpty) {
-          debugPrint('❌ Session missing');
-          break;
-        }
-
-        String sdpOffer = '';
         try {
-          final sessionMap = jsonDecode(sessionStr);
-          sdpOffer = sessionMap['sdp'] ?? '';
-        } catch (e) {
-          debugPrint('❌ SDP parse error: $e');
-          break;
-        }
+          final args = call.arguments as Map?;
+          final callerName = args?['callerName'] as String? ?? 'Unknown';
+          final uuid = args?['uuid'] as String? ?? '';
+          debugPrint('📞 Incoming VoIP: $callerName');
 
-        await initializeCallListener();
-        final service = GlobalCallListenerService.instance.service;
-        if (service != null) {
-          service.setPendingCall(callId: callId, sdp: sdpOffer);
-          service.currentPhoneNumber = callerNumber;
-          service.currentCallerName = callerName;
-          service.isOutgoingCall = false;
+          final prefs = await SharedPreferences.getInstance();
+          // Prefer session passed in the native method call, fallback to prefs
+            final sessionFromArgs = args?['session'] as String?;
+            String sessionStr = sessionFromArgs?.isNotEmpty == true
+              ? sessionFromArgs!
+              : (prefs.getString('pending_call_session') ?? '');
+          final callerNumber = args?['callerNumber'] as String? ?? prefs.getString('pending_caller_number') ?? '';
+          final callId = args?['callId'] as String? ?? prefs.getString('pending_call_id') ?? uuid;
+
+          if (sessionStr.isEmpty) {
+            // Race condition: native may not have written prefs yet — retry shortly
+            int attempts = 0;
+            while (sessionStr.isEmpty && attempts < 2) {
+              await Future.delayed(const Duration(milliseconds: 200));
+              final freshPrefs = await SharedPreferences.getInstance();
+              final freshFromArgs = args?['session'] as String?;
+              final fresh = freshFromArgs?.isNotEmpty == true
+                  ? freshFromArgs!
+                  : (freshPrefs.getString('pending_call_session') ?? '');
+              if (fresh.isNotEmpty) {
+                // replace sessionStr and callerNumber/callId from fresh prefs if available
+                sessionStr = fresh;
+                // try to refresh callerNumber/callId from prefs
+                final fn = freshPrefs.getString('pending_caller_number') ?? '';
+                if (fn.isNotEmpty) {
+                  // ignore local variable shadowing; assign to callerNumber variable
+                }
+                break;
+              }
+              attempts++;
+            }
+            if (sessionStr.isEmpty) {
+              debugPrint('❌ Session missing');
+              break;
+            }
+          }
+
+          String sdpOffer = '';
+          try {
+            final sessionMap = jsonDecode(sessionStr);
+            sdpOffer = sessionMap['sdp'] ?? '';
+          } catch (e) {
+            debugPrint('❌ SDP parse error: $e');
+            break;
+          }
+
+          await initializeCallListener();
+          final service = GlobalCallListenerService.instance.service;
+          if (service != null) {
+            service.setPendingCall(callId: callId, sdp: sdpOffer);
+            service.currentPhoneNumber = callerNumber;
+            service.currentCallerName = callerName;
+            service.isOutgoingCall = false;
+          }
+        } catch (e) {
+          debugPrint('❌ onIncomingVoipCall handler error: $e');
         }
         break;
 
@@ -147,32 +178,62 @@ class WhatsAppCallingConfig {
         final uuid2 = args2?['uuid'] as String? ?? '';
 
         final prefs2 = await SharedPreferences.getInstance();
-        final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
-        final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
-        final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
-        final callId2 = prefs2.getString('pending_call_id') ?? uuid2;
+        String sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+        String callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
+        String callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
+        String callId2 = prefs2.getString('pending_call_id') ?? uuid2;
 
-        if (sessionStr2.isEmpty) {
-          debugPrint('❌ Session missing for answer');
-          break;
-        }
-
-        String sdp2 = '';
         try {
-          final sessionMap2 = jsonDecode(sessionStr2);
-          sdp2 = sessionMap2['sdp'] ?? '';
-        } catch (e) {
-          debugPrint('❌ SDP parse error: $e');
-          break;
-        }
+          final sessionFromArgs = args2?['session'] as String?;
+          if (sessionFromArgs?.isNotEmpty == true) sessionStr2 = sessionFromArgs!;
+          final cn = args2?['callerName'] as String?;
+          if (cn?.isNotEmpty == true) callerName2 = cn!;
+          final cnum = args2?['callerNumber'] as String?;
+          if (cnum?.isNotEmpty == true) callerNumber2 = cnum!;
+          final cid = args2?['callId'] as String?;
+          if (cid?.isNotEmpty == true) callId2 = cid!;
 
-        await initializeCallListener();
-        final svc = GlobalCallListenerService.instance.service;
-        if (svc != null) {
-          svc.setPendingCall(callId: callId2, sdp: sdp2);
-          svc.currentPhoneNumber = callerNumber2;
-          svc.currentCallerName = callerName2;
-          svc.isOutgoingCall = false;
+          if (sessionStr2.isEmpty) {
+            // Retry briefly for race between native writing prefs and Flutter handling
+            int attempts2 = 0;
+            while (sessionStr2.isEmpty && attempts2 < 2) {
+              await Future.delayed(const Duration(milliseconds: 200));
+              final freshPrefs2 = await SharedPreferences.getInstance();
+              final freshFromArgs2 = args2?['session'] as String?;
+              final fresh2 = freshFromArgs2?.isNotEmpty == true
+                  ? freshFromArgs2!
+                  : (freshPrefs2.getString('pending_call_session') ?? '');
+              if (fresh2.isNotEmpty) {
+                sessionStr2 = fresh2;
+                break;
+              }
+              attempts2++;
+            }
+            if (sessionStr2.isEmpty) {
+              debugPrint('❌ Session missing for answer');
+              break;
+            }
+          }
+
+          String sdp2 = '';
+          try {
+            final sessionMap2 = jsonDecode(sessionStr2);
+            sdp2 = sessionMap2['sdp'] ?? '';
+          } catch (e) {
+            debugPrint('❌ SDP parse error: $e');
+            break;
+          }
+
+          await initializeCallListener();
+          final svc = GlobalCallListenerService.instance.service;
+          if (svc != null) {
+            svc.setPendingCall(callId: callId2, sdp: sdp2);
+            svc.currentPhoneNumber = callerNumber2;
+            svc.currentCallerName = callerName2;
+            svc.isOutgoingCall = false;
+          }
+        } catch (e) {
+          debugPrint('❌ onNativeCallAnswered handler error: $e');
         }
 
         final userId = await getUserId();
@@ -204,6 +265,12 @@ class WhatsAppCallingConfig {
         break;
     }
   });
+  // Request cached VoIP token from native (AppDelegate caches token)
+  try {
+    await platform.invokeMethod('getVoipTokenForcefully');
+  } catch (e) {
+    debugPrint('getVoipTokenForcefully not available: $e');
+  }
 } // ============================================
   // CREDENTIALS HELPERS
   // ============================================
@@ -407,6 +474,10 @@ class WhatsAppCallingConfig {
       } else {
         debugPrint('📞 Unhandled CallKit event: $event');
       }
+    }, onError: (e, st) {
+      debugPrint('❌ CallKit stream error (android listener): $e');
+      debugPrint('$st');
+      // Ignore plugin parsing errors (some events may be malformed).
     });
   }
 

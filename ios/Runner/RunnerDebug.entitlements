@@ -3,10 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>production</string>
+	<string>development</string>
 
-	<!-- ✅ VoIP calling ke liye (background call delivery) -->
-	
-	<true/>
 </dict>
 </plist>

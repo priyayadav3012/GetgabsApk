@@ -10,6 +10,8 @@ import AVFoundation
     private let provider: CXProvider
     private let callController = CXCallController()
     private var activeCalls: [UUID: String] = [:]
+    // Background task id for answering in background
+    private var answerBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     override init() {
         let config = CXProviderConfiguration(localizedName: "GetGabs")
@@ -64,24 +66,40 @@ import AVFoundation
         
         // ⚠️ Fulfill immediately so OS unlocks audio session processing
         action.fulfill()
+        // Begin a background task so iOS gives us time to finish setup while
+        // the app is still backgrounded. We'll end it shortly after work completes.
+        self.answerBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "AnswerCall") {
+            // expiration handler: ensure task is ended
+            UIApplication.shared.endBackgroundTask(self.answerBackgroundTask)
+            self.answerBackgroundTask = .invalid
+        }
 
         // Small delay to let Flutter wake up completely from background memory loop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self else { return }
             self.setupAudioSession()
 
             // Notify Flutter via accurate matching method string
             if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
-                appDelegate.callChannel?.invokeMethod(
-                    "onNativeCallAnswered",
-                    arguments: [
-                        "uuid": action.callUUID.uuidString.lowercased()
-                    ]
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("CALL_ANSWERED_NATIVE"),
+                    object: nil,
+                    userInfo: ["uuid": action.callUUID.uuidString.lowercased()]
                 )
                 print("✅ Flutter notified via channel event: onNativeCallAnswered")
             }
 
             DispatchQueue.global(qos: .userInitiated).async {
                 print("🚀 Native thread pool: Ready for WebRTC connection initialization")
+            }
+
+            // End the background task after a short delay to allow Flutter/native work to start
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if self.answerBackgroundTask != .invalid {
+                    UIApplication.shared.endBackgroundTask(self.answerBackgroundTask)
+                    self.answerBackgroundTask = .invalid
+                    print("✅ Answer background task ended")
+                }
             }
         }
     }
@@ -116,8 +134,8 @@ import AVFoundation
         do {
             try session.setCategory(
                 .playAndRecord,
-                mode: .default,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
+                mode: .voiceChat,
+                options: [.allowBluetooth]
             )
             try session.setActive(true)
             print("🔊 Audio ready")

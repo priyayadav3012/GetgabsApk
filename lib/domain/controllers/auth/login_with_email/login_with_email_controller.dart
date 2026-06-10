@@ -62,14 +62,22 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
       isFocused.value = focusNode.hasFocus;
     });
 
- if (Platform.isIOS) {
-  _customCallChannel.setMethodCallHandler((call) async {
-    if (call.method == 'onVoipTokenReceived') {
-      iOSNativeVoipToken = call.arguments.toString();
-      print('🚀 VoIP Token: $iOSNativeVoipToken');
+    if (Platform.isIOS) {
+      _customCallChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onVoipTokenReceived') {
+          iOSNativeVoipToken = call.arguments.toString();
+          print('🚀 VoIP Token: $iOSNativeVoipToken');
+        }
+      });
+
+      // Request cached VoIP token from native if it was delivered earlier
+      // Fire-and-forget to avoid blocking controller initialization
+      _customCallChannel.invokeMethod('getVoipTokenForcefully').then((_) {
+        // no-op
+      }).catchError((e) {
+        print('getVoipTokenForcefully call failed: $e');
+      });
     }
-  });
-}
     blobCtrl = AnimationController(
         vsync: this, duration: const Duration(seconds: 8))
       ..repeat(reverse: true);
@@ -102,14 +110,6 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
 
   void toggleObscure() => obscure.value = !obscure.value;
 
-  void onLogin() {
-    if (formKey.currentState!.validate()) {
-      loignApi();
-    }
-  }
-
-  // ============================================
-  // GET DEVICE TOKEN
   // ✅ iOS: APNS token pehle wait karo, phir FCM
   // ✅ Android: directly FCM token lo
   // ============================================
@@ -168,6 +168,7 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
             'user_id': int.tryParse(userId) ?? 0,
             'fcm_token': fcmToken,
             'voip_token': voipToken,
+            'api_key': tokenKey,
           };
           remoteAuthService.saveVoipTokenService(tokenData, tokenKey).then((r) {
             print('Token sync response: $r');
@@ -259,5 +260,11 @@ class LoginWithEmailController extends GetxController with GetTickerProviderStat
     }).whenComplete(() {
       EasyLoading.dismiss();
     });
+  }
+
+  void onLogin() {
+    if (formKey.currentState!.validate()) {
+      loignApi();
+    }
   }
 }
