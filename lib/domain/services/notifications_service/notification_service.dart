@@ -88,9 +88,10 @@ class NotificationService {
 
         try {
           final decodedPayload = jsonDecode(payload);
-          if (decodedPayload is Map<String, dynamic> &&
-              decodedPayload.containsKey('profile_wa_key')) {
-            final profile = createProfileFromData(decodedPayload);
+          final profileData = _extractProfileData(decodedPayload);
+
+          if (profileData != null) {
+            final profile = createProfileFromData(profileData);
             handleProfileNavigation(profile);
           } else {
             print("No profile data in notification");
@@ -270,6 +271,40 @@ class NotificationService {
     return createProfileFromData(message.data);
   }
 
+  Map<String, dynamic>? _extractProfileData(dynamic payload) {
+    if (payload is! Map) {
+      return null;
+    }
+
+    final payloadMap = Map<String, dynamic>.from(payload);
+
+    if (payloadMap.containsKey('profile_wa_key')) {
+      return payloadMap;
+    }
+
+    final nestedData = payloadMap['data'];
+    if (nestedData is Map<String, dynamic> &&
+        nestedData.containsKey('profile_wa_key')) {
+      final extracted = Map<String, dynamic>.from(nestedData);
+
+      if (payloadMap['customerprofile_wa_id'] != null &&
+          extracted['profile_wa_id'] == null) {
+        extracted['profile_wa_id'] =
+            payloadMap['customerprofile_wa_id'].toString();
+      }
+
+      if (payloadMap['customerprofilename'] != null &&
+          extracted['profile_name'] == null) {
+        extracted['profile_name'] =
+            payloadMap['customerprofilename'].toString();
+      }
+
+      return extracted;
+    }
+
+    return null;
+  }
+
   void handleProfileNavigation(Profile profile) {
     if (Get.currentRoute.contains('/MessagesPage')) {
       final MessagesPageController? messagesPageController =
@@ -337,9 +372,11 @@ class NotificationService {
   Future<void> setupInteractMessage() async {
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       print('background=============++++++++++++++');
-      if (message.data.containsKey('profile_wa_key')) {
+      final profileData = _extractProfileData(message.data);
+
+      if (profileData != null) {
         print('fire notifcationssssssssssss');
-        var profile = createProfileFromMessage(message);
+        var profile = createProfileFromData(profileData);
         handleProfileNavigation(profile);
       } else {
         print("Topic Notification received without profile data");
@@ -357,8 +394,10 @@ class NotificationService {
           debugPrint('📞 Call notification in getInitialMessage — skipping');
           return;
         }
-        if (message.data.containsKey('profile_wa_key')) {
-          var profile = createProfileFromMessage(message);
+        final profileData = _extractProfileData(message.data);
+
+        if (profileData != null) {
+          var profile = createProfileFromData(profileData);
           handleProfileNavigation(profile);
         } else {
           print("Topic Notification received without profile data");
