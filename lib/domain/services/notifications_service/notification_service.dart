@@ -377,6 +377,41 @@ class NotificationService {
         });
   }
 
+  Future<void> showChatNotification({
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'message', 'text',
+        importance: Importance.max,
+        playSound: true,
+        showBadge: true,
+        enableVibration: true);
+
+    AndroidNotificationDetails androidNotificationDetails =
+        AndroidNotificationDetails(channel.id, channel.name,
+            channelDescription: 'used for showing chat messages.',
+            importance: Importance.max,
+            priority: Priority.high,
+            playSound: true,
+            ticker: 'ticker',
+            enableVibration: true);
+    DarwinNotificationDetails darwinNotificationDetails =
+        const DarwinNotificationDetails(
+            presentAlert: true, presentBadge: true, presentSound: true);
+    NotificationDetails notificationDetails = NotificationDetails(
+        android: androidNotificationDetails, iOS: darwinNotificationDetails);
+
+    await _flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title,
+      body,
+      notificationDetails,
+      payload: payload,
+    );
+  }
+
   // ============================================
   // SHOW SIMPLE NOTIFICATION
   // ============================================

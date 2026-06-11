@@ -46,7 +46,7 @@ app.*.map.json
 # IMPORTANT: These contain API keys and should never be committed
 **/google-services.json
 **/GoogleService-Info.plist
-# firebase.json
+firebase.json
 firebase1.json
 lib/firebase_options.dart
 
