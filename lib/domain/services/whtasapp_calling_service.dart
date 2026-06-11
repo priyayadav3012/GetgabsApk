@@ -1668,7 +1668,7 @@ Future<void> _quickAcceptToServer(String callId, int userId, String apiKey) asyn
 
       } else if (event is CallEventActionCallEnded) {
         debugPrint('📞 Call Ended');
-        await _service?.cleanupCall();
+        await _service?.terminateCall();
 
       } else if (event is CallEventActionCallToggleAudioSession) {
         debugPrint('📞 Audio session toggled');
