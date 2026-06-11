@@ -63,8 +63,8 @@ class WhatsAppCallingConfig {
   static const String _socketUrl = 'https://calling.getgabs.com';
 
   // ✅ iOS ke liye MethodChannel — native CallKit answer handle karta hai
-  static const platform =
-      MethodChannel('com.getgabs.whatsappcalling/channel');
+  // Match the iOS AppDelegate channel name
+  static const platform = MethodChannel('com.getgabs/calls');
 
   static Map<String, dynamic>? _pendingNavigation;
 
@@ -97,14 +97,11 @@ class WhatsAppCallingConfig {
     debugPrint('📲 Native Method: ${call.method}');
 
     switch (call.method) {
-
-      // ✅ VoIP Token — backend pe save hota hai login mein already
       case 'onVoipTokenReceived':
         final token = call.arguments as String?;
         debugPrint('📱 VoIP Token: $token');
         break;
 
-      // ✅ VoIP Push aaya — SDP SharedPrefs mein save karo
       case 'onIncomingVoipCall':
         final args = call.arguments as Map?;
         final callerName = args?['callerName'] as String? ?? 'Unknown';
@@ -140,7 +137,6 @@ class WhatsAppCallingConfig {
         }
         break;
 
-      // ✅ User ne green button dabaya — calling screen open karo
       case 'onNativeCallAnswered':
         debugPrint('📞 iOS Native Answer Received');
         final args2 = call.arguments as Map?;
@@ -195,13 +191,67 @@ class WhatsAppCallingConfig {
         }
         break;
 
-      // ✅ Native se call end hua
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
         await FlutterCallkitIncoming.endAllCalls();
         final svc2 = GlobalCallListenerService.instance.service;
         await svc2?.cleanupCall();
         break;
+
+      default:
+        debugPrint('📞 Unhandled native method: ${call.method}');
+    }
+  });
+
+  // Check if AppDelegate cached an answered call while Flutter wasn't ready
+  Future<void>.delayed(Duration.zero, () async {
+    try {
+      final result = await platform.invokeMethod('checkPendingAnsweredCall');
+      if (result != null && result is Map && result['uuid'] != null) {
+        debugPrint('📲 Pending answered UUID from native: ${result['uuid']}');
+        // Trigger same processing as onNativeCallAnswered
+        final prefs = await SharedPreferences.getInstance();
+        final sessionStr = prefs.getString('pending_call_session') ?? '';
+        final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
+        final callerNumber = prefs.getString('pending_caller_number') ?? '';
+        final callId = prefs.getString('pending_call_id') ?? result['uuid'];
+
+        if (sessionStr.isNotEmpty) {
+          String sdp = '';
+          try {
+            final sessionMap = jsonDecode(sessionStr);
+            sdp = sessionMap['sdp'] ?? '';
+          } catch (e) {}
+
+          await initializeCallListener();
+          final svc = GlobalCallListenerService.instance.service;
+          if (svc != null) {
+            svc.setPendingCall(callId: callId, sdp: sdp);
+            svc.currentPhoneNumber = callerNumber;
+            svc.currentCallerName = callerName;
+            svc.isOutgoingCall = false;
+          }
+
+          final userId = await getUserId();
+          final adminId = await getAdminId();
+          final apiKey = await getBusinessApiKey();
+          final avatar =
+              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+
+          storePendingNavigation({
+            'userId': userId,
+            'adminId': adminId,
+            'apiKey': apiKey,
+            'callerNumber': callerNumber,
+            'callerName': callerName,
+            'avatar': avatar,
+          });
+
+          if (isAppInForeground) await handlePendingCallNavigation();
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ checkPendingAnsweredCall error: $e');
     }
   });
 } // ============================================
