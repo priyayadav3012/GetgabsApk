@@ -57,7 +57,7 @@ final TextEditingController headerTextController = TextEditingController();
 
     if (isDocument || isVideo || isImage) {
       // Use FilePicker for selecting multiple documents or videos
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      FilePickerResult? result = await FilePicker.pickFiles(
         allowMultiple: true,
         type: isVideo
             ? FileType.video
@@ -192,7 +192,7 @@ final TextEditingController headerTextController = TextEditingController();
         break;
 
       case 'document':
-        FilePickerResult? result = await FilePicker.platform.pickFiles(
+        FilePickerResult? result = await FilePicker.pickFiles(
           type: FileType.custom,
           allowedExtensions:
               allowedExtensions, // Allowed file types for documents
@@ -249,7 +249,7 @@ final TextEditingController headerTextController = TextEditingController();
   ]; // Allowed file types
 
   Future<void> selectDocument() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
+    FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: allowedExtensions, // Restrict to allowed file types
     );

@@ -162,7 +162,7 @@ class TemplateStuctureBottomSheetController extends GetxController {
         break;
 
       case 'document':
-        FilePickerResult? result = await FilePicker.platform.pickFiles(
+        FilePickerResult? result = await FilePicker.pickFiles(
           type: FileType.custom,
           allowedExtensions:
               allowedExtensions, // Allowed file types for documents
@@ -219,7 +219,7 @@ class TemplateStuctureBottomSheetController extends GetxController {
   ]; // Allowed file types
 
   Future<void> selectDocument() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
+    FilePickerResult? result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: allowedExtensions, // Restrict to allowed file types
     );

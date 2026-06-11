@@ -78,7 +78,7 @@ class NotificationService {
         iOS: iOSInitializationsSettings);
 
     await _flutterLocalNotificationsPlugin.initialize(
-      initializationSettings,
+      settings: initializationSettings,
       onDidReceiveNotificationResponse: (response) {
         final payload = response.payload;
         if (payload == null || payload.isEmpty) {
@@ -404,10 +404,10 @@ class NotificationService {
         android: androidNotificationDetails, iOS: darwinNotificationDetails);
 
     await _flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title,
-      body,
-      notificationDetails,
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: notificationDetails,
       payload: payload,
     );
   }
@@ -437,11 +437,12 @@ class NotificationService {
     NotificationDetails notificationDetails = NotificationDetails(
         android: androidNotificationDetails, iOS: darwinNotificationDetails);
     _flutterLocalNotificationsPlugin.show(
-        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        message.notification!.title,
-        message.notification!.body,
-        notificationDetails,
-        payload: jsonEncode(message.data));
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: message.notification!.title,
+      body: message.notification!.body,
+      notificationDetails: notificationDetails,
+      payload: jsonEncode(message.data),
+    );
   }
 
   // ============================================
@@ -506,10 +507,10 @@ class NotificationService {
     );
 
     _flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      message.notification?.title ?? 'No Title',
-      message.notification?.body ?? 'No Body',
-      notificationDetails,
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: message.notification!.title,
+      body: message.notification!.body,
+      notificationDetails: notificationDetails,
       payload: "data",
     );
   }
