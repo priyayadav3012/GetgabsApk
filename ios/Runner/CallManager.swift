@@ -2,6 +2,7 @@ import Foundation
 import CallKit
 import UIKit
 import AVFoundation
+import WebRTC
 
 @objc public class CallManager: NSObject, CXProviderDelegate {
 
@@ -27,6 +28,11 @@ import AVFoundation
         self.provider = CXProvider(configuration: config)
         super.init()
         self.provider.setDelegate(self, queue: nil)
+
+        // Configure WebRTC to use manual audio management and start disabled
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
+        rtcAudioSession.useManualAudio = true
+        rtcAudioSession.isAudioEnabled = false
     }
 
     // MARK: - INCOMING CALL
@@ -108,21 +114,37 @@ import AVFoundation
     // MARK: - AUDIO ACTIVATED
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         print("🔊 Audio Session Activated")
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.audioSessionDidActivate(audioSession)
+        rtcSession.isAudioEnabled = true
+    }
+
+    // MARK: - AUDIO DEACTIVATED
+    public func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        print("🔇 Audio Session Deactivated")
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.audioSessionDidDeactivate(audioSession)
+        rtcSession.isAudioEnabled = false
     }
 
     // MARK: - AUDIO SETUP
     private func setupAudioSession() {
-        let session = AVAudioSession.sharedInstance()
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
+        rtcAudioSession.lockForConfiguration()
+        defer {
+            rtcAudioSession.unlockForConfiguration()
+        }
+        
         do {
-            try session.setCategory(
-                .playAndRecord,
-                mode: .default,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
-            )
-            try session.setActive(true)
-            print("🔊 Audio ready")
+            let configuration = RTCAudioSessionConfiguration.webRTC()
+            configuration.category = AVAudioSession.Category.playAndRecord.rawValue
+            configuration.mode = AVAudioSession.Mode.voiceChat.rawValue
+            configuration.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+            
+            try rtcAudioSession.setConfiguration(configuration)
+            print("🔊 RTCAudioSession configured successfully")
         } catch {
-            print("❌ Audio setup error: \(error)")
+            print("❌ RTCAudioSession configuration error: \(error)")
         }
     }
 
