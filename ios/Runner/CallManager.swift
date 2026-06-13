@@ -4,6 +4,9 @@ import UIKit
 import AVFoundation
 import WebRTC
 
+// ✅ FINAL: Pure native iOS CallKit — flutter_callkit_incoming bypass
+// Ye file poori calling lifecycle handle karti hai iOS pe
+
 @objc public class CallManager: NSObject, CXProviderDelegate {
 
     @objc public static let shared = CallManager()
@@ -11,14 +14,21 @@ import WebRTC
     private let provider: CXProvider
     private let callController = CXCallController()
     private var activeCalls: [UUID: String] = [:]
+    
+    // Flutter ko callback dene ke liye
+    weak var appDelegate: AppDelegate?
+
+    @objc public var hasActiveCall: Bool {
+        return !activeCalls.isEmpty
+    }
 
     override init() {
         let config = CXProviderConfiguration(localizedName: "GetGabs")
         config.supportsVideo = false
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
-        config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = false
+        config.supportedHandleTypes = [.phoneNumber]
+        config.includesCallsInRecents = true
         config.ringtoneSound = "ringtone.caf"
 
         if let image = UIImage(named: "IconMask") {
@@ -27,18 +37,23 @@ import WebRTC
 
         self.provider = CXProvider(configuration: config)
         super.init()
-        self.provider.setDelegate(self, queue: nil)
+        self.provider.setDelegate(self, queue: DispatchQueue.main)
 
-        // Configure WebRTC to use manual audio management and start disabled
+        // ✅ WebRTC manual audio — CXProvider delegate activate karega
         let rtcAudioSession = RTCAudioSession.sharedInstance()
         rtcAudioSession.useManualAudio = true
         rtcAudioSession.isAudioEnabled = false
+        
+        print("✅ CallManager initialized with native CXProvider")
     }
 
     // MARK: - INCOMING CALL
-    @objc public func reportIncomingCall(uuid: UUID, handle: String) {
-        // End previous calls if any active
+    @objc public func reportIncomingCall(uuid: UUID, callerName: String, callerNumber: String) {
+        print("📨 reportIncomingCall called — uuid: \(uuid.uuidString), caller: \(callerName), number: \(callerNumber)")
+
+        // Pehle se active call hai toh end karo
         if !activeCalls.isEmpty {
+            print("⚠️ There is an existing active call(s): \(activeCalls.keys.map { $0.uuidString }) — ending them before reporting new call")
             for oldUuid in activeCalls.keys {
                 provider.reportCall(with: oldUuid, endedAt: Date(), reason: .failed)
             }
@@ -46,77 +61,99 @@ import WebRTC
         }
 
         let update = CXCallUpdate()
-        update.remoteHandle = CXHandle(type: .generic, value: handle)
-        update.localizedCallerName = handle
+        let handle = callerNumber.isEmpty ? callerName : callerNumber
+        update.remoteHandle = CXHandle(type: .phoneNumber, value: handle)
+        update.localizedCallerName = callerName.isEmpty ? callerNumber : callerName
         update.hasVideo = false
         update.supportsHolding = false
         update.supportsDTMF = false
         update.supportsGrouping = false
         update.supportsUngrouping = false
 
-        provider.reportNewIncomingCall(with: uuid, update: update) { error in
-            if let error = error {
-                print("❌ CallKit incoming error: \(error)")
-                return
+        // Ensure CallKit reporting happens on main thread
+        DispatchQueue.main.async { [weak self] in
+            print("🔁 Reporting new incoming call to CXProvider on main thread")
+            self?.provider.reportNewIncomingCall(with: uuid, update: update) { error in
+                if let error = error {
+                    print("❌ CallKit incoming error: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self?.appDelegate?.callChannel?.invokeMethod(
+                            "onCallKitError",
+                            arguments: ["error": error.localizedDescription]
+                        )
+                    }
+                    return
+                }
+                self?.activeCalls[uuid] = handle
+                print("✅ Native CallKit UI shown for: \(callerName) (\(callerNumber)) — activeCalls now: \(self?.activeCalls.keys.map { $0.uuidString } ?? [])")
             }
-            print("✅ CallKit UI shown")
-            self.activeCalls[uuid] = handle
         }
     }
 
-    // MARK: - ANSWER CALL (FIXED LIFECYCLE METHOD)
+    // MARK: - ANSWER CALL
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        print("📞 Call Answered in Native CallManager")
+        print("📞 User answered call — UUID: \(action.callUUID)")
         
-        // ⚠️ Fulfill immediately so OS unlocks audio session processing
+        // ✅ Immediately fulfill — OS audio unlock ke liye zaroori
         action.fulfill()
 
-        // Small delay to let Flutter wake up completely from background memory loop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.setupAudioSession()
+        setupAudioSession()
 
-            // Notify Flutter via accurate matching method string
-            if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
-                appDelegate.callChannel?.invokeMethod(
-                    "onNativeCallAnswered",
-                    arguments: [
-                        "uuid": action.callUUID.uuidString.lowercased()
-                    ]
-                )
-                print("✅ Flutter notified via channel event: onNativeCallAnswered")
+        DispatchQueue.main.async { [weak self] in
+            let uuidStr = action.callUUID.uuidString.lowercased()
+            
+            if let channel = self?.appDelegate?.callChannel {
+                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": uuidStr])
+                print("✅ Flutter notified: onNativeCallAnswered")
+            } else {
+                // Flutter abhi ready nahi — cache karo
+                print("⏳ Flutter not ready — caching answered UUID: \(uuidStr)")
+                self?.appDelegate?.pendingAnsweredCallUUID = uuidStr
             }
-
-            DispatchQueue.global(qos: .userInitiated).async {
-                print("🚀 Native thread pool: Ready for WebRTC connection initialization")
-            }
+            
+            NotificationCenter.default.post(
+                name: NSNotification.Name("CALL_ANSWERED_NATIVE"),
+                object: nil,
+                userInfo: ["uuid": uuidStr]
+            )
         }
     }
 
     // MARK: - END CALL
     public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        print("📵 Call Ended")
+        print("📵 Call ended — UUID: \(action.callUUID)")
+        
+        let uuidStr = action.callUUID.uuidString.lowercased()
         activeCalls.removeValue(forKey: action.callUUID)
-
-        NotificationCenter.default.post(
-            name: NSNotification.Name("CALL_ENDED_NATIVE"),
-            object: nil,
-            userInfo: ["uuid": action.callUUID.uuidString.lowercased()]
-        )
-
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        } catch {
-            print("❌ Audio deactivate error: \(error)")
-        }
         action.fulfill()
+
+        deactivateAudioSession()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.appDelegate?.callChannel?.invokeMethod(
+                "onCallEndedNatively",
+                arguments: ["uuid": uuidStr]
+            )
+            NotificationCenter.default.post(
+                name: NSNotification.Name("CALL_ENDED_NATIVE"),
+                object: nil,
+                userInfo: ["uuid": uuidStr]
+            )
+        }
+        
+        if appDelegate?.currentCallUUID == uuidStr {
+            appDelegate?.currentCallUUID = nil
+        }
     }
 
-    // MARK: - AUDIO ACTIVATED
+    // MARK: - AUDIO ACTIVATED (CXProvider callback — awaaz ke liye most important)
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        print("🔊 Audio Session Activated")
+        print("🔊 Audio Session Activated by CXProvider")
         let rtcSession = RTCAudioSession.sharedInstance()
         rtcSession.audioSessionDidActivate(audioSession)
+        // ✅ YE LINE awaaz aane ke liye zaroori — pehle ye missing thi
         rtcSession.isAudioEnabled = true
+        print("✅ WebRTC audio ENABLED")
     }
 
     // MARK: - AUDIO DEACTIVATED
@@ -128,12 +165,10 @@ import WebRTC
     }
 
     // MARK: - AUDIO SETUP
-    private func setupAudioSession() {
+    @objc public func setupAudioSession() {
         let rtcAudioSession = RTCAudioSession.sharedInstance()
         rtcAudioSession.lockForConfiguration()
-        defer {
-            rtcAudioSession.unlockForConfiguration()
-        }
+        defer { rtcAudioSession.unlockForConfiguration() }
         
         do {
             let configuration = RTCAudioSessionConfiguration.webRTC()
@@ -142,29 +177,50 @@ import WebRTC
             configuration.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
             
             try rtcAudioSession.setConfiguration(configuration)
-            print("🔊 RTCAudioSession configured successfully")
+            rtcAudioSession.isAudioEnabled = true
+            print("🔊 Audio session manually configured + enabled")
         } catch {
-            print("❌ RTCAudioSession configuration error: \(error)")
+            print("❌ Audio session error: \(error)")
+        }
+    }
+
+    @objc public func deactivateAudioSession() {
+        let rtcAudioSession = RTCAudioSession.sharedInstance()
+        rtcAudioSession.isAudioEnabled = false
+        
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+        } catch {
+            print("❌ Deactivate error: \(error)")
         }
     }
 
     // MARK: - PROVIDER RESET
     public func providerDidReset(_ provider: CXProvider) {
         activeCalls.removeAll()
-        print("♻️ Provider reset")
+        deactivateAudioSession()
+        print("♻️ CXProvider reset")
     }
 
-    // MARK: - PROGRAMMATIC END CALL
+    // MARK: - PROGRAMMATIC END CALL (Flutter se call hota hai)
     @objc public func endCallProgrammatically(uuid: UUID) {
         let action = CXEndCallAction(call: uuid)
         let transaction = CXTransaction(action: action)
-
         callController.request(transaction) { error in
             if let error = error {
-                print("❌ End call failed: \(error)")
+                print("❌ Programmatic end failed: \(error)")
+                self.activeCalls.removeValue(forKey: uuid)
+                self.deactivateAudioSession()
             } else {
                 print("✅ Call ended programmatically")
             }
         }
+    }
+    
+    @objc public var activeCallUUID: UUID? {
+        return activeCalls.keys.first
     }
 }

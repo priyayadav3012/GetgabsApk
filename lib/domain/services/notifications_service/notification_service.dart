@@ -365,6 +365,7 @@ class NotificationService {
         }
       }
     });
+    
   } // ============================================
 
   // BACKGROUND / TERMINATED MESSAGE HANDLER

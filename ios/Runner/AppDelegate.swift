@@ -13,10 +13,8 @@ import FirebaseMessaging
     var voipRegistry: PKPushRegistry?
     var callChannel: FlutterMethodChannel?
     var currentCallUUID: String?
-    
-    // Caching Variables
     var cachedVoipTokenString: String?
-    var pendingAnsweredCallUUID: String? // 🔥 Stores UUID if Flutter is not yet active
+    var pendingAnsweredCallUUID: String?
 
     override func application(
         _ application: UIApplication,
@@ -37,8 +35,13 @@ import FirebaseMessaging
             binaryMessenger: controller.binaryMessenger
         )
         
+        // ✅ CallManager ko apDelegate reference do
+        CallManager.shared.appDelegate = self
+        
         callChannel?.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
-            if call.method == "endNativeCall" {
+            switch call.method {
+                
+            case "endNativeCall":
                 if let args = call.arguments as? [String: Any],
                    let uuidStr = args["uuid"] as? String,
                    let uuid = UUID(uuidString: uuidStr) {
@@ -47,29 +50,49 @@ import FirebaseMessaging
                 } else {
                     result(FlutterError(code: "INVALID_ARGUMENTS", message: "UUID missing", details: nil))
                 }
-            }
-            else if call.method == "getVoipTokenForcefully" {
-                print("📡 Flutter requested token forcefully.")
+                
+            case "setupAudioSession":
+                // Flutter WebRTC connect hone ke baad audio enable karo
+                CallManager.shared.setupAudioSession()
+                result(nil)
+                
+            case "getVoipTokenForcefully":
                 if let cachedToken = self?.cachedVoipTokenString {
-                    print("🚀 Dispatching cached VoIP token instantly: \(cachedToken)")
                     self?.callChannel?.invokeMethod("onVoipTokenReceived", arguments: cachedToken)
                 } else {
-                    print("⏳ No cached token found, re-initializing push registry configurations...")
                     self?.retriggerVoipRegistration()
                 }
                 result(nil)
-            }
-            // 🔥 NEW: Flutter handles force check on boot-up for killed/lock state calls
-            else if call.method == "checkPendingAnsweredCall" {
+                
+            case "checkPendingAnsweredCall":
                 if let pendingUuid = self?.pendingAnsweredCallUUID {
-                    print("🚀 Sending pending answered call to Flutter: \(pendingUuid)")
+                    print("🚀 Sending pending answered UUID to Flutter: \(pendingUuid)")
                     result(["uuid": pendingUuid])
-                    self?.pendingAnsweredCallUUID = nil // Clear cache after handing over
+                    self?.pendingAnsweredCallUUID = nil
                 } else {
-                    result(nil) // No pending calls found
+                    result(nil)
                 }
-            }
-            else {
+
+            // DEBUG: allow triggering an incoming call locally from Flutter
+            case "simulateIncomingCall":
+                if let args = call.arguments as? [String: Any] {
+                    let uuidStr = (args["uuid"] as? String) ?? UUID().uuidString
+                    let callerName = (args["callerName"] as? String) ?? "Sim Caller"
+                    let callerNumber = (args["callerNumber"] as? String) ?? "0000000000"
+                    let rawUuid = uuidStr.lowercased()
+                    if let uuid = UUID(uuidString: rawUuid) {
+                        print("🧪 simulateIncomingCall invoked — \(rawUuid)")
+                        CallManager.shared.reportIncomingCall(uuid: uuid, callerName: callerName, callerNumber: callerNumber)
+                        result(["status": "reported", "uuid": rawUuid])
+                    } else {
+                        print("❌ simulateIncomingCall invalid uuid: \(rawUuid)")
+                        result(FlutterError(code: "INVALID_UUID", message: "Invalid UUID", details: nil))
+                    }
+                } else {
+                    result(FlutterError(code: "INVALID_ARGUMENTS", message: "Arguments required", details: nil))
+                }
+                
+            default:
                 result(FlutterMethodNotImplemented)
             }
         }
@@ -88,13 +111,13 @@ import FirebaseMessaging
         application.registerForRemoteNotifications()
 
         // ==========================================
-        // PUSHKIT SETUP (VoIP Pushes)
+        // PUSHKIT SETUP (VoIP)
         // ==========================================
         voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
         voipRegistry?.delegate = self
         voipRegistry?.desiredPushTypes = [.voIP]
 
-        // 1. Native Call End Lifecycle Linker
+        // Call end observer
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleNativeCallEnd(_:)),
@@ -102,7 +125,7 @@ import FirebaseMessaging
             object: nil
         )
 
-        // 2. NATIVE CALL ANSWER LIFECYCLE LINKER
+        // Call answer observer
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleNativeCallAnswered(_:)),
@@ -110,7 +133,7 @@ import FirebaseMessaging
             object: nil
         )
 
-        print("✅ PushKit and CallKit Event Listeners Initialized")
+        print("✅ AppDelegate initialized — Native CallKit mode")
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
@@ -125,8 +148,7 @@ import FirebaseMessaging
     // MARK: - VOIP TOKEN RECEIVED
     func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
         let token = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
-        print("📲 VoIP Token: \(token)")
-        
+        print("📲 VoIP Token received: \(token)")
         self.cachedVoipTokenString = token
         callChannel?.invokeMethod("onVoipTokenReceived", arguments: token)
     }
@@ -143,73 +165,100 @@ import FirebaseMessaging
     }
 
     // MARK: - INCOMING VOIP PUSH
-    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-        print("🔥 VOIP PUSH RECEIVED IN APPDELEGATE")
+    // ✅ FIX: Sirf native CallKit dikhao — flutter_callkit_incoming nahi
+    // Ye VoIP push se trigger hota hai (app killed/background dono mein)
+    func pushRegistry(
+        _ registry: PKPushRegistry,
+        didReceiveIncomingPushWith payload: PKPushPayload,
+        for type: PKPushType,
+        completion: @escaping () -> Void
+    ) {
+        print("🔥 VoIP PUSH RECEIVED")
 
         let data = payload.dictionaryPayload
-        print("📦 Payload Data: \(data)")
+        print("📦 Payload: \(data)")
 
-        let rawUuidString = data["uuid"] as? String ?? UUID().uuidString
-        let uuidString = rawUuidString.lowercased()
+        // ✅ UUID handle karo
+        let rawUuidString = (data["uuid"] as? String ?? UUID().uuidString).lowercased()
         let callerName = data["callerName"] as? String ?? "Incoming Call"
+        let callerNumber = data["callerNumber"] as? String ?? ""
 
-        guard let uuid = UUID(uuidString: uuidString) else {
-            print("❌ Invalid UUID string received: \(uuidString)")
+        guard let uuid = UUID(uuidString: rawUuidString) else {
+            print("❌ Invalid UUID: \(rawUuidString)")
+            // ✅ Apple requirement: MUST call completion and show CallKit
+            // Agar valid UUID nahi hai, ek naya UUID banao
+            let fallbackUUID = UUID()
+            CallManager.shared.reportIncomingCall(
+                uuid: fallbackUUID,
+                callerName: callerName,
+                callerNumber: callerNumber
+            )
             completion()
             return
         }
 
-        self.currentCallUUID = uuidString
-        print("📞 Processing Incoming Call From: \(callerName) with UUID: \(uuidString)")
+        // Duplicate push guard
+        if let existing = self.currentCallUUID, existing == rawUuidString {
+            print("⚠️ Duplicate VoIP push ignored: \(rawUuidString)")
+            completion()
+            return
+        }
 
-        // Show CallKit Screen Instantly
-        CallManager.shared.reportIncomingCall(uuid: uuid, handle: callerName)
+        self.currentCallUUID = rawUuidString
 
+        // ✅ KEY FIX: Native CXProvider se CallKit dikhao
+        // flutter_callkit_incoming se nahi — warna double screen aata tha
+        CallManager.shared.reportIncomingCall(
+            uuid: uuid,
+            callerName: callerName,
+            callerNumber: callerNumber
+        )
+
+        // ✅ Apple ka strict requirement — completion() zaroor call karo
         completion()
-        print("✅ Apple push execution lifecycle closed safely.")
+        print("✅ VoIP push handled — native CallKit shown")
 
-        // Async dispatch to Flutter (if Flutter is already awake)
+        // Flutter ko async notify karo (agar awake ho)
         DispatchQueue.main.async { [weak self] in
             self?.callChannel?.invokeMethod(
                 "onIncomingVoipCall",
                 arguments: [
-                    "uuid": uuidString,
-                    "callerName": callerName
+                    "uuid": rawUuidString,
+                    "callerName": callerName,
+                    "callerNumber": callerNumber
                 ]
             )
-            print("📱 Delayed background payload dispatched to Flutter channel")
-        }
-    }
-    
-    // MARK: - NATIVE NOTIFICATION OBSERVER (END CALL)
-    @objc private func handleNativeCallEnd(_ notification: Notification) {
-        if let userInfo = notification.userInfo,
-           let uuidStr = userInfo["uuid"] as? String {
-            print("🧹 Cleaning up call reference in AppDelegate for: \(uuidStr)")
-            if self.currentCallUUID == uuidStr.lowercased() {
-                self.currentCallUUID = nil
-            }
-            
-            callChannel?.invokeMethod("onCallEndedNatively", arguments: ["uuid": uuidStr.lowercased()])
         }
     }
 
-    // MARK: - NATIVE NOTIFICATION OBSERVER (ANSWER CALL)
+    // MARK: - CALL END OBSERVER
+    @objc private func handleNativeCallEnd(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let uuidStr = userInfo["uuid"] as? String else { return }
+        
+        print("🧹 Call ended cleanup: \(uuidStr)")
+        
+        if self.currentCallUUID == uuidStr.lowercased() {
+            self.currentCallUUID = nil
+        }
+        callChannel?.invokeMethod("onCallEndedNatively", arguments: ["uuid": uuidStr.lowercased()])
+    }
+
+    // MARK: - CALL ANSWER OBSERVER
     @objc private func handleNativeCallAnswered(_ notification: Notification) {
-        if let userInfo = notification.userInfo,
-           let uuidStr = userInfo["uuid"] as? String {
-            let cleanUuid = uuidStr.lowercased()
-            print("📲 Native Call Answered Linker Hooked for UUID: \(cleanUuid)")
-            
-            if let channel = callChannel {
-                // If Flutter engine is completely initialized, invoke channel event
-                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": cleanUuid])
-                print("✅ Flutter notified via channel event: onNativeCallAnswered")
-            } else {
-                // 🔥 CRITICAL CACHE: If app is killed/locked, Flutter channel is nil. Save it!
-                print("⏳ Flutter not ready yet. Caching answered call event for UUID: \(cleanUuid)")
-                self.pendingAnsweredCallUUID = cleanUuid
-            }
+        guard let userInfo = notification.userInfo,
+              let uuidStr = userInfo["uuid"] as? String else { return }
+        
+        let cleanUuid = uuidStr.lowercased()
+        print("📲 Call answered: \(cleanUuid)")
+
+        if let channel = callChannel {
+            channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": cleanUuid])
+            print("✅ Flutter notified via onNativeCallAnswered")
+        } else {
+            // Flutter not ready (killed state) — cache karo
+            print("⏳ Flutter not ready — caching: \(cleanUuid)")
+            self.pendingAnsweredCallUUID = cleanUuid
         }
     }
 }

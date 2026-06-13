@@ -133,9 +133,16 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     );
 
     // ✅ Duplicate CallKit notification avoid karo
-    final active = await FlutterCallkitIncoming.activeCalls();
-    if (active.isEmpty) {
-      await FlutterCallkitIncoming.showCallkitIncoming(params);
+    // On iOS we prefer native PushKit + CallKit handling (AppDelegate/CallManager).
+    // So only persist pending call info here and let native show CallKit.
+    if (Platform.isIOS) {
+      // Native side will display CallKit using PushKit; do not show from Dart.
+      debugPrint('iOS background message: saved pending call for native CallKit');
+    } else {
+      final active = await FlutterCallkitIncoming.activeCalls();
+      if (active.isEmpty) {
+        await FlutterCallkitIncoming.showCallkitIncoming(params);
+      }
     }
   }
 

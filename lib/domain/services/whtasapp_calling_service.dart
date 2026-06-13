@@ -7,6 +7,7 @@ import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -306,7 +307,9 @@ class WhatsAppCallingService {
 
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
-      } else if (isGlobalListener) {
+      } else if (isGlobalListener && !Platform.isIOS) {
+        // iOS uses the native PushKit + CallKit path for incoming calls.
+        // Showing Flutter CallKit here too causes the duplicate incoming UI seen in TestFlight.
         await _showCallKitForIncoming(callData);
       } else {
         _showIncomingCallPopup(callData);
@@ -469,6 +472,19 @@ class WhatsAppCallingService {
     }
     _callKitShowing = true;
 
+    // Prevent duplicate CallKit UI when an active CallKit call already exists
+    try {
+      final active = await FlutterCallkitIncoming.activeCalls();
+      if (active.isNotEmpty) {
+        debugPrint(
+            '⚠️ Active CallKit calls present — skipping showCallkitIncoming');
+        _callKitShowing = false;
+        return;
+      }
+    } catch (e) {
+      debugPrint('⚠️ activeCalls check failed: $e');
+    }
+
     try {
       final originalCallId = callData['callId']?.toString() ?? '';
       final callerName = callData['callerName']?.toString() ?? '';
@@ -550,7 +566,8 @@ class WhatsAppCallingService {
     if (_isRinging) return;
     _isRinging = true;
     try {
-      if (await Vibration.hasVibrator() ?? false) {
+      final hasVibrator = await Vibration.hasVibrator();
+      if (hasVibrator == true) {
         Vibration.vibrate(pattern: [0, 1000, 500, 1000, 500, 1000], repeat: 2);
       }
       _ringtonePlayer = AudioPlayer();
@@ -761,48 +778,60 @@ class WhatsAppCallingService {
   }
 
   Future<void> answerCall() async {
-    print("call_answerrrrrrrrrrrrrrrrrrrrrrrrrrrrr");
-
+    debugPrint("📞 answerCall() called");
+ 
     if (_callAccepted) {
-      debugPrint('⚠️ CALL ALREADY ACCEPTED');
+      debugPrint('⚠️ CALL ALREADY ACCEPTED — skipping');
       return;
     }
-
-    if (!_hasActivePendingCall ||
-        _pendingSdp == null ||
-        _pendingCallId == null) {
+ 
+    if (!_hasActivePendingCall || _pendingSdp == null || _pendingCallId == null) {
       throw Exception('No active incoming call');
     }
-
+ 
     String safeSdp = _pendingSdp!;
     String safeCallId = _pendingCallId!;
-
+ 
     incomingSdp = safeSdp;
     currentCallId = safeCallId;
     _isCallActive = true;
     _callAccepted = true;
-
+ 
     await _requestPermissions();
     await _createPeerConnection();
-
+ 
     localStream = await webrtc.navigator.mediaDevices.getUserMedia({
       'audio': {
         'echoCancellation': true,
         'noiseSuppression': true,
-        'autoGainControl': true
+        'autoGainControl': true,
       },
       'video': false,
     }).timeout(const Duration(seconds: 10));
-
+ 
     for (var track in localStream!.getTracks()) {
       peerConnection!.addTrack(track, localStream!);
     }
-
+ 
     await peerConnection!
         .setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
+ 
     RTCSessionDescription answer = await peerConnection!.createAnswer();
     await peerConnection!.setLocalDescription(answer);
-
+ 
+    // ✅ iOS: WebRTC connect hone se pehle audio session setup karo
+    // Yahi awaaz na aane ki wajah thi — native CXProvider didActivate ke baad
+    // explicitly enable karna padta hai
+    if (Platform.isIOS) {
+      try {
+        const iosChannel = MethodChannel('com.getgabs/calls');
+        await iosChannel.invokeMethod('setupAudioSession');
+        debugPrint('✅ iOS: Audio session setup requested before HTTP answer');
+      } catch (e) {
+        debugPrint('⚠️ Audio setup warning (non-fatal): $e');
+      }
+    }
+ 
     final response = await http
         .post(
           Uri.parse('$socketUrl/accept-whatsapp-call'),
@@ -815,16 +844,27 @@ class WhatsAppCallingService {
           }),
         )
         .timeout(const Duration(seconds: 15));
-
+ 
     if (response.statusCode != 200) {
       throw Exception('Failed to answer: ${response.statusCode}');
     }
-
+ 
+    // Answer successful — clear pending prefs
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('pending_call_session');
+      await prefs.remove('pending_call_id');
+      await prefs.remove('pending_callkit_id');
+    } catch (e) {
+      debugPrint('⚠️ Prefs cleanup warning: $e');
+    }
+ 
     _updateStatus('Connected');
     callStartTime = DateTime.now();
     await _logCallStart();
-  }
-
+    debugPrint('✅ answerCall() completed successfully');
+}
+ 
   Future<void> makeCall(String phoneNumber) async {
     print("call_make_callllllllllllllllllllllllllllllllll");
     debugPrint('🔌 Socket connected? ${socket?.connected}');

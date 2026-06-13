@@ -240,9 +240,10 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   }
 
   void _endCall() {
-    HapticFeedback.mediumImpact();
-    _callingService?.terminateCall();
-  }
+  HapticFeedback.mediumImpact();
+  _handleCallEnded('Call ended');   // 👈 UI turant update + timer cancel
+  _callingService?.terminateCall(); // 👈 backend/socket cleanup async
+}
 
   String _getInitials(String name, String number) {
     if (name.isNotEmpty && !_isOnlyNumbers(name)) {

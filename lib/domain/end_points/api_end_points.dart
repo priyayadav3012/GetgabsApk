@@ -88,36 +88,205 @@ class WhatsAppCallingConfig {
   // iOS — Native MethodChannel init
   // Android pe yeh call mat karo (Platform check se handle hoga)
   // ============================================
- static void initMethodChannel() {
+//  static void initMethodChannel() {
+//   if (!Platform.isIOS) return;
+
+//   FlutterCallkitIncoming.endAllCalls();
+
+//   platform.setMethodCallHandler((call) async {
+//     debugPrint('📲 Native Method: ${call.method}');
+
+//     switch (call.method) {
+//       case 'onVoipTokenReceived':
+//         final token = call.arguments as String?;
+//         debugPrint('📱 VoIP Token: $token');
+//         break;
+
+//       case 'onIncomingVoipCall':
+//         final args = call.arguments as Map?;
+//         final callerName = args?['callerName'] as String? ?? 'Unknown';
+//         final uuid = args?['uuid'] as String? ?? '';
+//         debugPrint('📞 Incoming VoIP: $callerName');
+
+//         final prefs = await SharedPreferences.getInstance();
+//         final sessionStr = prefs.getString('pending_call_session') ?? '';
+//         final callerNumber = prefs.getString('pending_caller_number') ?? '';
+//         final callId = prefs.getString('pending_call_id') ?? uuid;
+
+//         if (sessionStr.isEmpty) {
+//           debugPrint('❌ Session missing');
+//           break;
+//         }
+
+//         String sdpOffer = '';
+//         try {
+//           final sessionMap = jsonDecode(sessionStr);
+//           sdpOffer = sessionMap['sdp'] ?? '';
+//         } catch (e) {
+//           debugPrint('❌ SDP parse error: $e');
+//           break;
+//         }
+
+//         await initializeCallListener();
+//         final service = GlobalCallListenerService.instance.service;
+//         if (service != null) {
+//           service.setPendingCall(callId: callId, sdp: sdpOffer);
+//           service.currentPhoneNumber = callerNumber;
+//           service.currentCallerName = callerName;
+//           service.isOutgoingCall = false;
+//         }
+//         break;
+
+//       case 'onNativeCallAnswered':
+//         debugPrint('📞 iOS Native Answer Received');
+//         final args2 = call.arguments as Map?;
+//         final uuid2 = args2?['uuid'] as String? ?? '';
+
+//         final prefs2 = await SharedPreferences.getInstance();
+//         final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+//         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
+//         final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
+//         final callId2 = prefs2.getString('pending_call_id') ?? uuid2;
+
+//         if (sessionStr2.isEmpty) {
+//           debugPrint('❌ Session missing for answer');
+//           break;
+//         }
+
+//         String sdp2 = '';
+//         try {
+//           final sessionMap2 = jsonDecode(sessionStr2);
+//           sdp2 = sessionMap2['sdp'] ?? '';
+//         } catch (e) {
+//           debugPrint('❌ SDP parse error: $e');
+//           break;
+//         }
+
+//         await initializeCallListener();
+//         final svc = GlobalCallListenerService.instance.service;
+//         if (svc != null) {
+//           svc.setPendingCall(callId: callId2, sdp: sdp2);
+//           svc.currentPhoneNumber = callerNumber2;
+//           svc.currentCallerName = callerName2;
+//           svc.isOutgoingCall = false;
+//         }
+
+//         final userId = await getUserId();
+//         final adminId = await getAdminId();
+//         final apiKey = await getBusinessApiKey();
+//         final avatar =
+//             'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName2)}&background=075E54&color=fff&size=200&rounded=true';
+
+//         storePendingNavigation({
+//           'userId': userId,
+//           'adminId': adminId,
+//           'apiKey': apiKey,
+//           'callerNumber': callerNumber2,
+//           'callerName': callerName2,
+//           'avatar': avatar,
+//         });
+
+//         if (isAppInForeground) {
+//           await handlePendingCallNavigation();
+//         }
+//         break;
+
+//       case 'onCallEndedNatively':
+//         debugPrint('📵 Native Call Ended');
+//         await FlutterCallkitIncoming.endAllCalls();
+//         final svc2 = GlobalCallListenerService.instance.service;
+//         await svc2?.cleanupCall();
+//         break;
+
+//       default:
+//         debugPrint('📞 Unhandled native method: ${call.method}');
+//     }
+//   });
+
+//   // Check if AppDelegate cached an answered call while Flutter wasn't ready
+//   Future<void>.delayed(Duration.zero, () async {
+//     try {
+//       final result = await platform.invokeMethod('checkPendingAnsweredCall');
+//       if (result != null && result is Map && result['uuid'] != null) {
+//         debugPrint('📲 Pending answered UUID from native: ${result['uuid']}');
+//         // Trigger same processing as onNativeCallAnswered
+//         final prefs = await SharedPreferences.getInstance();
+//         final sessionStr = prefs.getString('pending_call_session') ?? '';
+//         final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
+//         final callerNumber = prefs.getString('pending_caller_number') ?? '';
+//         final callId = prefs.getString('pending_call_id') ?? result['uuid'];
+
+//         if (sessionStr.isNotEmpty) {
+//           String sdp = '';
+//           try {
+//             final sessionMap = jsonDecode(sessionStr);
+//             sdp = sessionMap['sdp'] ?? '';
+//           } catch (e) {}
+
+//           await initializeCallListener();
+//           final svc = GlobalCallListenerService.instance.service;
+//           if (svc != null) {
+//             svc.setPendingCall(callId: callId, sdp: sdp);
+//             svc.currentPhoneNumber = callerNumber;
+//             svc.currentCallerName = callerName;
+//             svc.isOutgoingCall = false;
+//           }
+
+//           final userId = await getUserId();
+//           final adminId = await getAdminId();
+//           final apiKey = await getBusinessApiKey();
+//           final avatar =
+//               'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+
+//           storePendingNavigation({
+//             'userId': userId,
+//             'adminId': adminId,
+//             'apiKey': apiKey,
+//             'callerNumber': callerNumber,
+//             'callerName': callerName,
+//             'avatar': avatar,
+//           });
+
+//           if (isAppInForeground) await handlePendingCallNavigation();
+//         }
+//       }
+//     } catch (e) {
+//       debugPrint('❌ checkPendingAnsweredCall error: $e');
+//     }
+//   });
+// } // ============================================
+  
+  static void initMethodChannel() {
   if (!Platform.isIOS) return;
-
-  FlutterCallkitIncoming.endAllCalls();
-
+ 
   platform.setMethodCallHandler((call) async {
     debugPrint('📲 Native Method: ${call.method}');
-
+ 
     switch (call.method) {
       case 'onVoipTokenReceived':
         final token = call.arguments as String?;
         debugPrint('📱 VoIP Token: $token');
+        // Yahan token server pe save karo agar chahiye
         break;
-
+ 
       case 'onIncomingVoipCall':
+        // Native CallKit already UI show kar chuka hai
+        // Hum sirf pending data set karte hain
         final args = call.arguments as Map?;
         final callerName = args?['callerName'] as String? ?? 'Unknown';
+        final callerNumber = args?['callerNumber'] as String? ?? '';
         final uuid = args?['uuid'] as String? ?? '';
-        debugPrint('📞 Incoming VoIP: $callerName');
-
+        debugPrint('📞 VoIP incoming notified to Flutter: $callerName ($uuid)');
+ 
         final prefs = await SharedPreferences.getInstance();
-        final sessionStr = prefs.getString('pending_call_session') ?? '';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
         final callId = prefs.getString('pending_call_id') ?? uuid;
-
+        final sessionStr = prefs.getString('pending_call_session') ?? '';
+ 
         if (sessionStr.isEmpty) {
-          debugPrint('❌ Session missing');
+          debugPrint('⏳ Session not yet stored — will handle on answer');
           break;
         }
-
+ 
         String sdpOffer = '';
         try {
           final sessionMap = jsonDecode(sessionStr);
@@ -126,7 +295,7 @@ class WhatsAppCallingConfig {
           debugPrint('❌ SDP parse error: $e');
           break;
         }
-
+ 
         await initializeCallListener();
         final service = GlobalCallListenerService.instance.service;
         if (service != null) {
@@ -136,23 +305,24 @@ class WhatsAppCallingConfig {
           service.isOutgoingCall = false;
         }
         break;
-
+ 
       case 'onNativeCallAnswered':
+        // User ne native CallKit pe green button dabaya
         debugPrint('📞 iOS Native Answer Received');
         final args2 = call.arguments as Map?;
         final uuid2 = args2?['uuid'] as String? ?? '';
-
+ 
         final prefs2 = await SharedPreferences.getInstance();
         final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
         final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
         final callId2 = prefs2.getString('pending_call_id') ?? uuid2;
-
+ 
         if (sessionStr2.isEmpty) {
           debugPrint('❌ Session missing for answer');
           break;
         }
-
+ 
         String sdp2 = '';
         try {
           final sessionMap2 = jsonDecode(sessionStr2);
@@ -161,7 +331,12 @@ class WhatsAppCallingConfig {
           debugPrint('❌ SDP parse error: $e');
           break;
         }
-
+ 
+        if (sdp2.isEmpty) {
+          debugPrint('❌ SDP empty — cannot answer');
+          break;
+        }
+ 
         await initializeCallListener();
         final svc = GlobalCallListenerService.instance.service;
         if (svc != null) {
@@ -170,13 +345,13 @@ class WhatsAppCallingConfig {
           svc.currentCallerName = callerName2;
           svc.isOutgoingCall = false;
         }
-
+ 
         final userId = await getUserId();
         final adminId = await getAdminId();
         final apiKey = await getBusinessApiKey();
         final avatar =
             'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName2)}&background=075E54&color=fff&size=200&rounded=true';
-
+ 
         storePendingNavigation({
           'userId': userId,
           'adminId': adminId,
@@ -185,76 +360,90 @@ class WhatsAppCallingConfig {
           'callerName': callerName2,
           'avatar': avatar,
         });
-
+ 
+        // ✅ App foreground mein hai toh turant screen open karo
         if (isAppInForeground) {
           await handlePendingCallNavigation();
         }
+        // Background/killed: _checkInitialCall() handle karega jab app open hogi
         break;
-
+ 
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
-        await FlutterCallkitIncoming.endAllCalls();
         final svc2 = GlobalCallListenerService.instance.service;
         await svc2?.cleanupCall();
+        final endPrefs = await SharedPreferences.getInstance();
+        await _clearCallPrefs(endPrefs);
         break;
-
+ 
+      case 'onCallKitError':
+        final errorArgs = call.arguments as Map?;
+        debugPrint('❌ CallKit error: ${errorArgs?['error']}');
+        break;
+ 
       default:
         debugPrint('📞 Unhandled native method: ${call.method}');
     }
   });
-
-  // Check if AppDelegate cached an answered call while Flutter wasn't ready
+ 
+  // App start pe check karo — killed state mein answer hua tha?
   Future<void>.delayed(Duration.zero, () async {
     try {
       final result = await platform.invokeMethod('checkPendingAnsweredCall');
       if (result != null && result is Map && result['uuid'] != null) {
         debugPrint('📲 Pending answered UUID from native: ${result['uuid']}');
-        // Trigger same processing as onNativeCallAnswered
+ 
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
         final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
         final callerNumber = prefs.getString('pending_caller_number') ?? '';
         final callId = prefs.getString('pending_call_id') ?? result['uuid'];
-
+ 
         if (sessionStr.isNotEmpty) {
           String sdp = '';
           try {
             final sessionMap = jsonDecode(sessionStr);
             sdp = sessionMap['sdp'] ?? '';
-          } catch (e) {}
-
-          await initializeCallListener();
-          final svc = GlobalCallListenerService.instance.service;
-          if (svc != null) {
-            svc.setPendingCall(callId: callId, sdp: sdp);
-            svc.currentPhoneNumber = callerNumber;
-            svc.currentCallerName = callerName;
-            svc.isOutgoingCall = false;
+          } catch (e) {
+            debugPrint('❌ SDP parse: $e');
           }
-
-          final userId = await getUserId();
-          final adminId = await getAdminId();
-          final apiKey = await getBusinessApiKey();
-          final avatar =
-              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
-
-          storePendingNavigation({
-            'userId': userId,
-            'adminId': adminId,
-            'apiKey': apiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          });
-
-          if (isAppInForeground) await handlePendingCallNavigation();
+ 
+          if (sdp.isNotEmpty) {
+            await initializeCallListener();
+            final svc = GlobalCallListenerService.instance.service;
+            if (svc != null) {
+              svc.setPendingCall(callId: callId, sdp: sdp);
+              svc.currentPhoneNumber = callerNumber;
+              svc.currentCallerName = callerName;
+              svc.isOutgoingCall = false;
+            }
+ 
+            final userId = await getUserId();
+            final adminId = await getAdminId();
+            final apiKey = await getBusinessApiKey();
+            final avatar =
+                'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+ 
+            storePendingNavigation({
+              'userId': userId,
+              'adminId': adminId,
+              'apiKey': apiKey,
+              'callerNumber': callerNumber,
+              'callerName': callerName,
+              'avatar': avatar,
+            });
+ 
+            if (isAppInForeground) await handlePendingCallNavigation();
+          }
         }
       }
     } catch (e) {
       debugPrint('❌ checkPendingAnsweredCall error: $e');
     }
   });
-} // ============================================
+}
+ 
+  
   // CREDENTIALS HELPERS
   // ============================================
   static Future<String> getBusinessApiKey() async {
@@ -324,142 +513,155 @@ class WhatsAppCallingConfig {
   // ✅ iOS: GlobalCallListenerService ka listener kafi hai
   //         (duplicate listener avoid karo)
   // ============================================
+  // static void setupCallKitEvents() {
+  //   if (Platform.isIOS) {
+  //     // ✅ iOS pe GlobalCallListenerService already listen kar raha hai
+  //     // Duplicate listener lagane se double events fire honge
+  //     debugPrint('⚠️ iOS: setupCallKitEvents skipped — GlobalCallListenerService handles events');
+  //     return;
+  //   }
+
+  //   // ✅ Android: Full CallKit event handling
+  //   FlutterCallkitIncoming.onEvent.listen((CallEvent? event) async {
+  //     if (event == null) return;
+
+  //     debugPrint('📞 CallKit event: $event');
+
+  //     // ✅ v3.0.0 — sealed class pattern use karo (Event enum gone)
+  //     if (event is CallEventActionCallAccept) {
+  //       final callId = event.id;
+  //       final prefs = await SharedPreferences.getInstance();
+  //       final sessionStr = prefs.getString('pending_call_session') ?? '';
+  //       final callerName = prefs.getString('pending_caller_name') ?? '';
+  //       final callerNumber = prefs.getString('pending_caller_number') ?? '';
+  //       final savedCallId = prefs.getString('pending_call_id') ?? callId;
+
+  //       debugPrint('📞 Accept — session empty: ${sessionStr.isEmpty} | number: $callerNumber');
+
+  //       if (sessionStr.isEmpty || callerNumber.isEmpty) {
+  //         debugPrint('❌ No pending session/number');
+  //         return;
+  //       }
+
+  //       String sdpOffer = '';
+  //       try {
+  //         final sessionMap = jsonDecode(sessionStr);
+  //         sdpOffer = sessionMap['sdp'] ?? '';
+  //       } catch (e) {
+  //         debugPrint('❌ Session parse error: $e');
+  //         return;
+  //       }
+
+  //       if (sdpOffer.isEmpty) {
+  //         debugPrint('❌ SDP empty');
+  //         return;
+  //       }
+
+  //       final userId = await getUserId();
+  //       final adminId = await getAdminId();
+  //       final apiKey = await getBusinessApiKey();
+
+  //       final displayForAvatar = callerName.isNotEmpty
+  //           ? callerName
+  //           : callerNumber.replaceAll('+', '').replaceAll(' ', '');
+
+  //       final String avatarBgColor = _checkIsMessagedly() ? '4242D4' : '075E54';
+  //       final avatar =
+  //           'https://ui-avatars.com/api/?name=${Uri.encodeComponent(displayForAvatar)}&background=$avatarBgColor&color=fff&size=200&rounded=true&bold=true';
+
+  //       await initializeCallListener();
+  //       final service = GlobalCallListenerService.instance.service;
+  //       if (service != null) {
+  //         service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
+  //         service.currentPhoneNumber = callerNumber;
+  //         service.currentCallerName = callerName;
+  //         service.isOutgoingCall = false;
+  //         debugPrint('✅ setPendingCall done');
+  //       }
+
+  //       await _clearCallPrefs(prefs);
+
+  //       if (Get.context != null) {
+  //         debugPrint('🚀 Navigating directly');
+  //         Get.to(
+  //           () => WhatsAppCallingScreen(
+  //             userId: userId,
+  //             adminId: adminId,
+  //             businessApiKey: apiKey,
+  //             initialPhoneNumber: callerNumber,
+  //             contactName: callerName,
+  //             contactAvatar: avatar,
+  //             isIncoming: true,
+  //           ),
+  //           transition: Transition.fadeIn,
+  //         );
+  //       } else {
+  //         debugPrint('⏳ Context not ready — storing pending navigation');
+  //         _pendingNavigation = {
+  //           'userId': userId,
+  //           'adminId': adminId,
+  //           'apiKey': apiKey,
+  //           'callerNumber': callerNumber,
+  //           'callerName': callerName,
+  //           'avatar': avatar,
+  //         };
+  //       }
+
+  //     } else if (event is CallEventActionCallDecline) {
+  //       debugPrint('📵 Call declined from CallKit');
+  //       final callId = event.id;
+  //       final prefs2 = await SharedPreferences.getInstance();
+  //       final declineCallId = prefs2.getString('pending_call_id') ?? callId;
+  //       await _clearCallPrefs(prefs2);
+
+  //       final svc = GlobalCallListenerService.instance.service;
+  //       if (svc != null && declineCallId.isNotEmpty) {
+  //         await svc.terminateCall();
+  //       } else {
+  //         await _terminateCallViaHttp(declineCallId);
+  //       }
+
+  //       try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
+
+  //     } else if (event is CallEventActionCallTimeout) {
+  //       debugPrint('⏰ Call timeout');
+  //       final callId = event.id;
+  //       final prefs3 = await SharedPreferences.getInstance();
+  //       final timeoutCallId = prefs3.getString('pending_call_id') ?? callId;
+  //       await _clearCallPrefs(prefs3);
+
+  //       final svc2 = GlobalCallListenerService.instance.service;
+  //       if (svc2 != null && timeoutCallId.isNotEmpty) {
+  //         svc2.currentCallId = timeoutCallId;
+  //         await svc2.terminateCall();
+  //       } else {
+  //         await _terminateCallViaHttp(timeoutCallId);
+  //       }
+
+  //       try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
+
+  //     } else if (event is CallEventActionCallEnded) {
+  //       try { await FlutterCallkitIncoming.endAllCalls(); } catch (e) {}
+
+  //     } else {
+  //       debugPrint('📞 Unhandled CallKit event: $event');
+  //     }
+  //   });
+  // }
+
+  
   static void setupCallKitEvents() {
-    if (Platform.isIOS) {
-      // ✅ iOS pe GlobalCallListenerService already listen kar raha hai
-      // Duplicate listener lagane se double events fire honge
-      debugPrint('⚠️ iOS: setupCallKitEvents skipped — GlobalCallListenerService handles events');
-      return;
-    }
-
-    // ✅ Android: Full CallKit event handling
-    FlutterCallkitIncoming.onEvent.listen((CallEvent? event) async {
-      if (event == null) return;
-
-      debugPrint('📞 CallKit event: $event');
-
-      // ✅ v3.0.0 — sealed class pattern use karo (Event enum gone)
-      if (event is CallEventActionCallAccept) {
-        final callId = event.id;
-        final prefs = await SharedPreferences.getInstance();
-        final sessionStr = prefs.getString('pending_call_session') ?? '';
-        final callerName = prefs.getString('pending_caller_name') ?? '';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
-        final savedCallId = prefs.getString('pending_call_id') ?? callId;
-
-        debugPrint('📞 Accept — session empty: ${sessionStr.isEmpty} | number: $callerNumber');
-
-        if (sessionStr.isEmpty || callerNumber.isEmpty) {
-          debugPrint('❌ No pending session/number');
-          return;
-        }
-
-        String sdpOffer = '';
-        try {
-          final sessionMap = jsonDecode(sessionStr);
-          sdpOffer = sessionMap['sdp'] ?? '';
-        } catch (e) {
-          debugPrint('❌ Session parse error: $e');
-          return;
-        }
-
-        if (sdpOffer.isEmpty) {
-          debugPrint('❌ SDP empty');
-          return;
-        }
-
-        final userId = await getUserId();
-        final adminId = await getAdminId();
-        final apiKey = await getBusinessApiKey();
-
-        final displayForAvatar = callerName.isNotEmpty
-            ? callerName
-            : callerNumber.replaceAll('+', '').replaceAll(' ', '');
-
-        final String avatarBgColor = _checkIsMessagedly() ? '4242D4' : '075E54';
-        final avatar =
-            'https://ui-avatars.com/api/?name=${Uri.encodeComponent(displayForAvatar)}&background=$avatarBgColor&color=fff&size=200&rounded=true&bold=true';
-
-        await initializeCallListener();
-        final service = GlobalCallListenerService.instance.service;
-        if (service != null) {
-          service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
-          service.currentPhoneNumber = callerNumber;
-          service.currentCallerName = callerName;
-          service.isOutgoingCall = false;
-          debugPrint('✅ setPendingCall done');
-        }
-
-        await _clearCallPrefs(prefs);
-
-        if (Get.context != null) {
-          debugPrint('🚀 Navigating directly');
-          Get.to(
-            () => WhatsAppCallingScreen(
-              userId: userId,
-              adminId: adminId,
-              businessApiKey: apiKey,
-              initialPhoneNumber: callerNumber,
-              contactName: callerName,
-              contactAvatar: avatar,
-              isIncoming: true,
-            ),
-            transition: Transition.fadeIn,
-          );
-        } else {
-          debugPrint('⏳ Context not ready — storing pending navigation');
-          _pendingNavigation = {
-            'userId': userId,
-            'adminId': adminId,
-            'apiKey': apiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          };
-        }
-
-      } else if (event is CallEventActionCallDecline) {
-        debugPrint('📵 Call declined from CallKit');
-        final callId = event.id;
-        final prefs2 = await SharedPreferences.getInstance();
-        final declineCallId = prefs2.getString('pending_call_id') ?? callId;
-        await _clearCallPrefs(prefs2);
-
-        final svc = GlobalCallListenerService.instance.service;
-        if (svc != null && declineCallId.isNotEmpty) {
-          await svc.terminateCall();
-        } else {
-          await _terminateCallViaHttp(declineCallId);
-        }
-
-        try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
-
-      } else if (event is CallEventActionCallTimeout) {
-        debugPrint('⏰ Call timeout');
-        final callId = event.id;
-        final prefs3 = await SharedPreferences.getInstance();
-        final timeoutCallId = prefs3.getString('pending_call_id') ?? callId;
-        await _clearCallPrefs(prefs3);
-
-        final svc2 = GlobalCallListenerService.instance.service;
-        if (svc2 != null && timeoutCallId.isNotEmpty) {
-          svc2.currentCallId = timeoutCallId;
-          await svc2.terminateCall();
-        } else {
-          await _terminateCallViaHttp(timeoutCallId);
-        }
-
-        try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
-
-      } else if (event is CallEventActionCallEnded) {
-        try { await FlutterCallkitIncoming.endAllCalls(); } catch (e) {}
-
-      } else {
-        debugPrint('📞 Unhandled CallKit event: $event');
-      }
-    });
+  // ✅ iOS: native CXProvider se events aate hain — Flutter listener nahi chahiye
+  if (Platform.isIOS) {
+    debugPrint('ℹ️ iOS: setupCallKitEvents skipped — native CXProvider handles events');
+    return;
   }
-
+ 
+  // ✅ Android: flutter_callkit_incoming events handle karo
+  debugPrint('📱 Android: Setting up flutter_callkit_incoming events');
+  // Android events GlobalCallListenerService._callkitSubscription mein handle hote hain
+  // Wahan se kaam ho raha hai — yahan duplicate listener mat banao
+}
   // ============================================
   // HANDLE PENDING CALL NAVIGATION
   // ✅ iOS: activeCalls check nahi — background answered calls block ho rahe the
