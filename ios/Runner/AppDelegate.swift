@@ -142,6 +142,9 @@ import FirebaseMessaging
         callChannel?.invokeMethod("onVoipTokenInvalid", arguments: nil)
     }
 
+    // #changedWithJClaude — Bug 2: extract callerNumber/callId/session from VoIP payload and
+    // write them to NSUserDefaults (=SharedPreferences on iOS) before showing CallKit.
+    // This guarantees SDP is available at answer time even in killed state.
     // MARK: - INCOMING VOIP PUSH
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
         print("🔥 VOIP PUSH RECEIVED IN APPDELEGATE")
@@ -151,7 +154,32 @@ import FirebaseMessaging
 
         let rawUuidString = data["uuid"] as? String ?? UUID().uuidString
         let uuidString = rawUuidString.lowercased()
-        let callerName = data["callerName"] as? String ?? "Incoming Call"
+
+        // Support both camelCase and snake_case field names from server
+        let callerName = (data["callerName"] as? String)
+            ?? (data["caller_name"] as? String)
+            ?? "Incoming Call"
+        let callerNumber = (data["callerNumber"] as? String)
+            ?? (data["caller_number"] as? String)
+            ?? ""
+        let callId = (data["callId"] as? String)
+            ?? (data["call_id"] as? String)
+            ?? uuidString
+        let sessionRaw = (data["session"] as? String) ?? ""
+
+        // Persist call metadata into NSUserDefaults so Flutter's SharedPreferences
+        // (which maps to NSUserDefaults on iOS) can read SDP/callId at answer time.
+        // This is the single source of truth for killed-state call data.
+        let defaults = UserDefaults.standard
+        defaults.set(callId, forKey: "pending_call_id")
+        defaults.set(callerName, forKey: "pending_caller_name")
+        defaults.set(callerNumber, forKey: "pending_caller_number")
+        defaults.set(uuidString, forKey: "pending_callkit_id")
+        if !sessionRaw.isEmpty {
+            defaults.set(sessionRaw, forKey: "pending_call_session")
+        }
+        defaults.synchronize()
+        print("📦 Call metadata written to NSUserDefaults for killed-state recovery")
 
         guard let uuid = UUID(uuidString: uuidString) else {
             print("❌ Invalid UUID string received: \(uuidString)")

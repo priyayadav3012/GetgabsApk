@@ -64,30 +64,48 @@ import WebRTC
         }
     }
 
-    // MARK: - ANSWER CALL (FIXED LIFECYCLE METHOD)
+    // #changedWithJClaude — Bug 1: replaced single 0.3s attempt with 20-retry loop so
+    // killed-state Flutter channel has time to initialise; sets pendingAnsweredCallUUID as fallback.
+    // MARK: - ANSWER CALL
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         print("📞 Call Answered in Native CallManager")
-        
-        // ⚠️ Fulfill immediately so OS unlocks audio session processing
+
+        // Fulfill immediately so OS unlocks audio session processing
         action.fulfill()
 
-        // Small delay to let Flutter wake up completely from background memory loop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.setupAudioSession()
+        let uuid = action.callUUID.uuidString.lowercased()
+        setupAudioSession()
 
-            // Notify Flutter via accurate matching method string
-            if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
-                appDelegate.callChannel?.invokeMethod(
-                    "onNativeCallAnswered",
-                    arguments: [
-                        "uuid": action.callUUID.uuidString.lowercased()
-                    ]
-                )
-                print("✅ Flutter notified via channel event: onNativeCallAnswered")
+        // Retry loop: Flutter engine may not be ready yet (especially in killed state).
+        // We retry every 0.5s up to 20 times (10s total).
+        // If all retries fail the UUID is cached so checkPendingAnsweredCall() can pick it up.
+        tryNotifyFlutter(uuid: uuid, attempt: 0)
+    }
+
+    // #changedWithJClaude — Bug 1: new helper; retries every 0.5 s up to 20× then caches UUID.
+    private func tryNotifyFlutter(uuid: String, attempt: Int) {
+        guard attempt < 20 else {
+            // Flutter never became ready — cache so checkPendingAnsweredCall() retrieves it
+            DispatchQueue.main.async {
+                if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+                    print("⏳ Flutter not ready after 10s — caching UUID: \(uuid)")
+                    appDelegate.pendingAnsweredCallUUID = uuid
+                }
             }
+            return
+        }
 
-            DispatchQueue.global(qos: .userInitiated).async {
-                print("🚀 Native thread pool: Ready for WebRTC connection initialization")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else {
+                self.tryNotifyFlutter(uuid: uuid, attempt: attempt + 1)
+                return
+            }
+            if let channel = appDelegate.callChannel {
+                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": uuid])
+                print("✅ Flutter notified: onNativeCallAnswered (attempt \(attempt + 1))")
+            } else {
+                print("⏳ Flutter channel not ready (attempt \(attempt + 1)) — retrying…")
+                self.tryNotifyFlutter(uuid: uuid, attempt: attempt + 1)
             }
         }
     }

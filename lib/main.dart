@@ -12,6 +12,7 @@ import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:uuid/uuid.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
@@ -19,11 +20,9 @@ import 'package:getgabs/firebase_options.dart';
 import 'package:getgabs/routes/app_page.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
 import 'domain/services/whtasapp_calling_service.dart';
 
-final _uuid = const Uuid();
 
 final RouteObserver<ModalRoute<void>> routeObserver =
     RouteObserver<ModalRoute<void>>();
@@ -44,7 +43,9 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
     debugPrint(isAppInForeground ? '🟢 FOREGROUND' : '🔴 BACKGROUND');
 
     if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 800), () {
+      // #changedWithJClaude — Bug 6: reduced from 800 ms to 100 ms so answerCall()
+      // reaches the server before the call times out on foreground resume.
+      Future.delayed(const Duration(milliseconds: 100), () {
         WhatsAppCallingConfig.handlePendingCallNavigation();
       });
     }
@@ -70,6 +71,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     final callerNumber = message.data['caller_number'] ?? '';
     final sessionRaw = message.data['session'] ?? '';
 
+    // Always store call metadata — SDP source for both platforms
     await prefs.setString('pending_call_id', callId);
     await prefs.setString('pending_call_session', sessionRaw);
     await prefs.setString('pending_caller_name', callerName);
@@ -77,12 +79,24 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await prefs.setString(
         'pending_from_user_id', message.data['from_user_id'] ?? '');
 
-    // ✅ iOS: UUID required hai CallKit ke liye (string ID reject hoti hai)
-    // ✅ Android: UUID safe hai — koi issue nahi
-    final safeId = Platform.isIOS ? _uuid.v4() : callId;
+    // #changedWithJClaude — Bug 3 fix REVERTED: restore flutter_callkit_incoming on iOS.
+    // The original removal assumed VoIP push would reliably show native CallKit on its own,
+    // but VoIP push delivery is not guaranteed. FCM-triggered CallKit is the safety net.
+    // UUID alignment: AppDelegate writes pending_callkit_id = VoIP UUID when VoIP push
+    // fires (which arrives before FCM on iOS). We reuse that UUID here so both CXProviders
+    // refer to the same call. If native CallKit already showed, iOS rejects the duplicate
+    // silently and the native UI stays. If VoIP push hasn't fired yet, we generate a new
+    // UUID and the plugin CallKit shows — answer path via CallEventActionCallAccept works
+    // correctly with Bugs 1/2/4/5/6 fixes in place.
+    final String safeId;
+    if (Platform.isIOS) {
+      final voipUuid = prefs.getString('pending_callkit_id') ?? '';
+      safeId = voipUuid.isNotEmpty ? voipUuid : const Uuid().v4();
+    } else {
+      safeId = callId;
+    }
     await prefs.setString('pending_callkit_id', safeId);
 
-    // ✅ Avatar — naam se generate karo
     final displayForAvatar = callerName.isNotEmpty
         ? callerName
         : callerNumber.replaceAll('+', '').replaceAll(' ', '');
@@ -102,8 +116,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       avatar: avatarUrl,
       type: 0,
       duration: 60000,
-
-      // ✅ Android: custom notification styling
       android: const AndroidParams(
         isCustomNotification: true,
         isShowLogo: false,
@@ -112,8 +124,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         actionColor: '#034737',
         textColor: '#ffffff',
       ),
-      // ✅ iOS: 'default' mode — 'voiceChat' se error 561017449 aata tha
-      //         supportsGrouping: false — Code 4 error prevent karta hai
       ios: const IOSParams(
         iconName: 'AppIcon',
         handleType: 'number',
@@ -132,7 +142,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ),
     );
 
-    // ✅ Duplicate CallKit notification avoid karo
     final active = await FlutterCallkitIncoming.activeCalls();
     if (active.isEmpty) {
       await FlutterCallkitIncoming.showCallkitIncoming(params);
@@ -301,8 +310,12 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
-    // ✅ GlobalCallListenerService initialize karo agar nahi hua
-    await _initGlobalCalling();
+    // #changedWithJClaude — use initializeCallListener (reads userId from GetStorage)
+    // instead of _initGlobalCalling (reads from SharedPreferences, returns if userId=0).
+    // In killed state, user_id may not be persisted in SharedPreferences, causing
+    // _initGlobalCalling to silently no-op and leaving service=null, which meant
+    // setPendingCall() was never called and hasActivePendingCall stayed false.
+    await WhatsAppCallingConfig.initializeCallListener();
 
     // ✅ Session parse karo
     String sdpOffer = '';
@@ -331,7 +344,9 @@ class _MyAppState extends State<MyApp> {
       service.currentPhoneNumber = callerNumber;
       service.currentCallerName = callerName;
       service.isOutgoingCall = false;
-      debugPrint('✅ setPendingCall done in _checkInitialCall');
+      debugPrint('✅ setPendingCall done in _checkInitialCall (hasActivePendingCall=${service.hasActivePendingCall})');
+    } else {
+      debugPrint('⚠️ service still null after initializeCallListener — will rely on prefs recovery in _initCall');
     }
 
     // ✅ Pending navigation set karo

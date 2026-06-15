@@ -91,7 +91,13 @@ class WhatsAppCallingConfig {
  static void initMethodChannel() {
   if (!Platform.isIOS) return;
 
-  FlutterCallkitIncoming.endAllCalls();
+  // #changedWithJClaude — Removed FlutterCallkitIncoming.endAllCalls() from here.
+  // Calling endAllCalls() on every startup was terminating the native CallKit call
+  // that AppDelegate just reported via CXProvider.reportNewIncomingCall(), both in
+  // killed state (where the call is presented before Flutter initialises) and on
+  // locked device (where iOS launches the app to handle the VoIP push).
+  // Stale calls from previous sessions are already cleaned up by cleanupCall() and
+  // by the CallEventActionCallEnded handler; blanket endAllCalls() is not needed.
 
   platform.setMethodCallHandler((call) async {
     debugPrint('📲 Native Method: ${call.method}');
@@ -496,9 +502,13 @@ class WhatsAppCallingConfig {
       ),
       transition: Transition.fadeIn,
     );
-
-    final prefs = await SharedPreferences.getInstance();
-    await _clearCallPrefs(prefs);
+    // #changedWithJClaude — Do NOT clear prefs here. In killed state there is a race
+    // between onNativeCallAnswered/checkPendingAnsweredCall setting the pending call on
+    // the service and _checkInitialCall() re-initialising GlobalCallListenerService.
+    // If the service is recreated after setPendingCall(), hasActivePendingCall ends up
+    // false when _initCall() runs. WhatsAppCallingScreen._initCall() now reads prefs as
+    // a fallback, so the SDP must still be present at that point. Prefs are cleared by
+    // cleanupCall() when the call ends — no double-clear needed here.
   }
 
   static Future<void> _clearCallPrefs(SharedPreferences prefs) async {

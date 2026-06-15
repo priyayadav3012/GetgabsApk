@@ -1,12 +1,14 @@
 // File: lib/ui/pages/dashboard/chats/messages_ui/whatsapp_calling_screen.dart
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
 import 'package:getgabs/ui/themes/themes.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class WhatsAppCallingScreen extends StatefulWidget {
   final int userId;
@@ -68,15 +70,22 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   }
 
   Future<void> _initCall() async {
-    // ✅ Step 1: Global service reuse karo agar socket connected ho
+    // ✅ Step 1: Reuse the global service if it exists — do NOT require
+    // socket?.connected == true here. In background/killed state the socket
+    // takes 200-400 ms to connect AFTER the service is initialised, so
+    // requiring it connected causes a second GlobalCallListenerService.initialize()
+    // call that tears down the existing service (running cleanupCall() which wipes
+    // SharedPreferences), destroying both the in-memory pending call state and the
+    // SharedPreferences fallback before answerCall() can use them.
+    // The socket reconnect loop in step 4 already handles waiting for connection.
+    // #changedWithJClaude — removed socket?.connected == true condition
     if (GlobalCallListenerService.instance.isInitialized &&
-        GlobalCallListenerService.instance.service != null &&
-        GlobalCallListenerService.instance.service!.socket?.connected == true) {
+        GlobalCallListenerService.instance.service != null) {
       _callingService = GlobalCallListenerService.instance.service;
       _isExternalService = true;
-      debugPrint('✅ Reusing global service socket');
+      debugPrint('✅ Reusing global service (socket=${_callingService!.socket?.connected})');
     } else {
-      // ✅ Step 2: Global listener reinitialize karo
+      // ✅ Step 2: Service truly missing — reinitialise
       debugPrint('⚠️ Global service not available, reinitializing...');
       await WhatsAppCallingConfig.initializeCallListener();
 
@@ -150,23 +159,64 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     if (widget.isIncoming) {
       setState(() => _status = 'Connecting...');
       try {
-        await Future.delayed(const Duration(milliseconds: 300));
-
+        // #changedWithJClaude — explicitly reconnect socket before answerCall().
+        // After a background→foreground transition the socket is often disconnected.
+        // Kicking connect() here ensures socket.io starts its reconnect handshake as
+        // early as possible so it is ready by the time setLocalDescription() triggers
+        // ICE candidate generation. Candidates generated while still reconnecting are
+        // buffered in _bufferedIceCandidates and flushed on the onConnect callback.
         if (_callingService!.socket?.connected != true) {
-          debugPrint('⏳ Waiting for socket connection...');
+          _callingService!.socket?.connect();
+          debugPrint('⏳ Socket not connected — kicked reconnect, waiting…');
           int wait = 0;
-          while (_callingService!.socket?.connected != true && wait < 30) {
+          while (_callingService!.socket?.connected != true && wait < 40) {
             await Future.delayed(const Duration(milliseconds: 200));
             wait++;
           }
+          debugPrint(
+            _callingService!.socket?.connected == true
+                ? '✅ Socket connected after ${wait * 200} ms'
+                : '⚠️ Socket still not connected after 8 s — ICE candidates will be buffered',
+          );
         }
 
         if (_callingService!.hasActivePendingCall) {
           debugPrint('✅ hasActivePendingCall = true, calling answerCall()...');
           await _callingService!.answerCall();
         } else {
-          debugPrint('❌ No pending call found — call may have expired');
-          _handleCallEnded('Call expired');
+          // #changedWithJClaude — Killed-state race-condition recovery.
+          // GlobalCallListenerService can be re-initialised between the time
+          // onNativeCallAnswered/checkPendingAnsweredCall sets the pending call and
+          // when _initCall() runs here, producing a fresh service where
+          // hasActivePendingCall=false. SharedPreferences is the durable fallback:
+          // we removed _clearCallPrefs() from handlePendingCallNavigation() so the
+          // SDP is still available at this point and we reconstruct the pending call.
+          debugPrint('⚠️ hasActivePendingCall=false — attempting prefs recovery...');
+          final prefs = await SharedPreferences.getInstance();
+          final savedCallId = prefs.getString('pending_call_id');
+          final savedSession = prefs.getString('pending_call_session');
+          if (savedCallId != null &&
+              savedSession != null &&
+              savedSession.isNotEmpty) {
+            try {
+              final sessionMap = jsonDecode(savedSession) as Map<String, dynamic>;
+              final sdp = sessionMap['sdp'] as String?;
+              if (sdp != null && sdp.isNotEmpty) {
+                _callingService!.setPendingCall(callId: savedCallId, sdp: sdp);
+                debugPrint('✅ Recovery: setPendingCall from prefs — callId=$savedCallId');
+                await _callingService!.answerCall();
+              } else {
+                debugPrint('❌ Recovery failed: SDP empty in prefs');
+                _handleCallEnded('Call expired');
+              }
+            } catch (e) {
+              debugPrint('❌ Recovery failed: $e');
+              _handleCallEnded('Call expired');
+            }
+          } else {
+            debugPrint('❌ No pending call found and prefs empty — call expired');
+            _handleCallEnded('Call expired');
+          }
         }
       } catch (e) {
         debugPrint('❌ answerCall error: $e');

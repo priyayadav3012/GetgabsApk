@@ -37,6 +37,12 @@ class WhatsAppCallingService {
   MediaStream? localStream;
   MediaStream? remoteStream;
 
+  // #changedWithJClaude — ICE candidate buffer: candidates generated before the socket
+  // reconnects (background → foreground transition) are queued here and flushed the
+  // moment onConnect fires. Without this they were silently dropped and WebRTC could
+  // never establish a peer connection even though SDP exchange succeeded via HTTP.
+  final List<Map<String, dynamic>> _bufferedIceCandidates = [];
+
   // ✅ iOS ke liye valid UUID store karna zaroori hai
   String? currentCallKitId;
 
@@ -441,6 +447,15 @@ class WhatsAppCallingService {
     socket!.onConnect((_) {
       debugPrint('✅ Socket connected: ${socket?.id}');
       if (!_isCallActive) _updateStatus('Connected - Ready to call');
+      // #changedWithJClaude — flush any ICE candidates that were generated while the
+      // socket was still reconnecting after a background→foreground transition.
+      if (_bufferedIceCandidates.isNotEmpty) {
+        debugPrint('🚀 Flushing ${_bufferedIceCandidates.length} buffered ICE candidates');
+        for (final payload in _bufferedIceCandidates) {
+          socket!.emit('ice_candidate', payload);
+        }
+        _bufferedIceCandidates.clear();
+      }
     });
 
     socket!.onDisconnect((_) {
@@ -706,6 +721,7 @@ class WhatsAppCallingService {
     currentPhoneNumber = null;
     currentCallerName = null;
     _callAccepted = false;
+    _bufferedIceCandidates.clear(); // #changedWithJClaude
 
     _updateStatus('Ready');
   }
@@ -734,16 +750,24 @@ class WhatsAppCallingService {
       }
     };
 
+    // #changedWithJClaude — buffer ICE candidates when socket is not yet connected.
+    // In background→foreground transitions the socket reconnects after setLocalDescription
+    // already triggers candidate generation, so we queue and flush on onConnect.
     peerConnection!.onIceCandidate = (candidate) {
-      if (currentCallId != null && socket?.connected == true) {
-        socket!.emit('ice_candidate', {
-          'callId': currentCallId,
-          'candidate': {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-          },
-        });
+      if (currentCallId == null) return;
+      final payload = {
+        'callId': currentCallId,
+        'candidate': {
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex,
+        },
+      };
+      if (socket?.connected == true) {
+        socket!.emit('ice_candidate', payload);
+      } else {
+        _bufferedIceCandidates.add(payload);
+        debugPrint('📦 ICE candidate buffered (socket not ready): ${_bufferedIceCandidates.length} queued');
       }
     };
 
@@ -1674,61 +1698,31 @@ class GlobalCallListenerService {
     )?.then((_) => _callScreenOpen = false);
   }
 
-// --- Insert into GlobalCallListenerService class ---
-  Future<bool> _waitForSocketConnected(WhatsAppCallingService svc,
-      {int timeoutMs = 12000}) async {
-    const int stepMs = 300;
-    int waited = 0;
-
-    // ensure socket exists and attempt connect
-    try {
-      if (svc.socket == null) {
-        await svc.initialize();
-      } else {
-        svc.socket?.connect();
-      }
-    } catch (_) {}
-
-    while ((svc.socket == null || svc.socket!.connected != true) &&
-        waited < timeoutMs) {
-      await Future.delayed(Duration(milliseconds: stepMs));
-      waited += stepMs;
-    }
-
-    return svc.socket?.connected == true;
-  }
-
-  Future<void> _quickAcceptToServer(
-      String callId, int userId, String apiKey) async {
-    try {
-      final resp = await http
-          .post(
-            Uri.parse(
-                '${WhatsAppCallingService.socketUrl}/accept-whatsapp-call'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'callId': callId,
-              'acceptedBy': userId,
-              'api_key': apiKey,
-              'quickAccept': true
-            }),
-          )
-          .timeout(const Duration(seconds: 8));
-
-      debugPrint('🔔 quickAccept response: ${resp.statusCode} ${resp.body}');
-    } catch (e) {
-      debugPrint('❌ quickAccept failed: $e');
-    }
-  }
-
+  // #changedWithJClaude — Bug 5: guard against service teardown while a call is pending/active.
+  // Previously any call to initialize() with a disconnected socket would dispose the service
+  // and lose the SDP that was already set via setPendingCall(). Now we reconnect instead.
   Future<void> initialize({
     required int userId,
     required int adminId,
     required String businessApiKey,
   }) async {
-    if (_isInitialized && (_service?.socket?.connected == true)) {
-      debugPrint('✅ GlobalListener already active');
-      return;
+    // If already set up and a pending/active call is in progress, never tear
+    // down — just reconnect the socket if it dropped. Tearing down here would
+    // destroy the pending SDP that was stored before the user answered.
+    if (_isInitialized && _service != null) {
+      if (_service!.hasActivePendingCall || _service!.isCallActive) {
+        if (_service!.socket?.connected != true) {
+          _service!.socket?.connect();
+          debugPrint('🔄 GlobalListener: socket reconnected for active call');
+        } else {
+          debugPrint('✅ GlobalListener already active with pending call — skipping reinit');
+        }
+        return;
+      }
+      if (_service!.socket?.connected == true) {
+        debugPrint('✅ GlobalListener already active');
+        return;
+      }
     }
 
     debugPrint('🌐 GlobalListener initializing...');
@@ -1799,9 +1793,15 @@ class GlobalCallListenerService {
           );
         }
 
-        // ✅ BACKGROUND / KILLED
+        // #changedWithJClaude — Bug 4: removed answerCall() + _waitForSocketConnected +
+        // _quickAcceptToServer from the background path. getUserMedia() fails silently in
+        // iOS background (no active audio session), and the socket wait (up to 12 s) races
+        // the server timeout. Now we only store pending nav; the full WebRTC handshake runs
+        // in IncomingCallScreen.initState() once CallKit has activated the audio session.
+        // Also deleted the now-unused _waitForSocketConnected and _quickAcceptToServer helpers.
+        // BACKGROUND / KILLED
         else {
-          debugPrint('🔴 BACKGROUND FLOW');
+          debugPrint('🔴 BACKGROUND FLOW — deferring WebRTC to foreground');
 
           final bgUserId = await WhatsAppCallingConfig.getUserId();
           final bgAdminId = await WhatsAppCallingConfig.getAdminId();
@@ -1809,6 +1809,12 @@ class GlobalCallListenerService {
           final avatar =
               'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
 
+          // Store nav so AppLifecycleObserver.resumed opens the call screen.
+          // Do NOT call answerCall() here — iOS audio session is not active in
+          // background, getUserMedia() fails silently, and the SDP exchange
+          // would race against the server timeout before the UI even opens.
+          // The full WebRTC handshake runs in IncomingCallScreen.initState()
+          // once the app foregrounds and the audio session is activated by CallKit.
           WhatsAppCallingConfig.storePendingNavigation({
             'userId': bgUserId,
             'adminId': bgAdminId,
@@ -1817,46 +1823,7 @@ class GlobalCallListenerService {
             'callerName': callerName,
             'avatar': avatar,
           });
-          // if (_service?.socket?.connected != true) {
-          //   _service?.socket?.connect();
-          //   await Future.delayed(const Duration(seconds: 2));
-          // }
-          // if (!(_service?.callAccepted ?? false)) {
-          //   try {
-          //     await _service?.answerCall();
-          //     debugPrint('✅ Call answered in background');
-          //   } catch (e) {
-          //     debugPrint('❌ Background answerCall error: $e');
-          //   }
-          // }
-
-          bool connected = false;
-          try {
-            connected =
-                await _waitForSocketConnected(_service!, timeoutMs: 12000);
-          } catch (e) {
-            debugPrint('🔎 waitForSocket error: $e');
-            connected = false;
-          }
-
-          if (connected) {
-            debugPrint('✅ Socket connected — attempting background answer');
-            if (!(_service?.callAccepted ?? false)) {
-              try {
-                await _service?.answerCall();
-                debugPrint('✅ Call answered in background via socket');
-              } catch (e) {
-                debugPrint(
-                    '❌ Background answerCall error (socket): $e — falling back to quickAccept');
-                await _quickAcceptToServer(callId, bgUserId, bgApiKey);
-              }
-            }
-          } else {
-            debugPrint(
-                '⏳ Socket not connected within timeout — performing quickAccept fallback');
-            await _quickAcceptToServer(callId, bgUserId, bgApiKey);
-            // UI and full SDP exchange will finish when app foregrounds.
-          }
+          debugPrint('✅ Pending navigation stored — will open on foreground');
         }
       } else if (event is CallEventActionCallTimeout) {
         debugPrint('📞 Call Timeout');

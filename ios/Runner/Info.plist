@@ -54,6 +54,7 @@
 		<string>audio</string>
 		<string>fetch</string>
 		<string>voip</string>
+		<string>processing</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
