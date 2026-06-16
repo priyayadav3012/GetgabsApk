@@ -69,6 +69,25 @@ import FirebaseMessaging
                     result(nil) // No pending calls found
                 }
             }
+            // #changedWithJClaude — activate/deactivate RTCAudioSession when
+            // flutter_callkit_incoming's CXProvider fires didActivate/didDeactivate
+            else if call.method == "setAudioEnabled" {
+                let enabled = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? false
+                CallManager.shared.setAudioEnabled(enabled)
+                result(nil)
+            }
+            // #changedWithJClaude — sync mute state with CallKit so Control Center reflects app UI
+            else if call.method == "setMuted" {
+                let muted = (call.arguments as? [String: Any])?["muted"] as? Bool ?? false
+                CallManager.shared.setMuted(muted)
+                result(nil)
+            }
+            // #changedWithJClaude — route audio to speaker/earpiece
+            else if call.method == "setSpeaker" {
+                let enabled = (call.arguments as? [String: Any])?["enabled"] as? Bool ?? false
+                CallManager.shared.setSpeaker(enabled)
+                result(nil)
+            }
             else {
                 result(FlutterMethodNotImplemented)
             }
@@ -99,14 +118,6 @@ import FirebaseMessaging
             self,
             selector: #selector(handleNativeCallEnd(_:)),
             name: NSNotification.Name("CALL_ENDED_NATIVE"),
-            object: nil
-        )
-
-        // 2. NATIVE CALL ANSWER LIFECYCLE LINKER
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleNativeCallAnswered(_:)),
-            name: NSNotification.Name("CALL_ANSWERED_NATIVE"),
             object: nil
         )
 
@@ -222,22 +233,4 @@ import FirebaseMessaging
         }
     }
 
-    // MARK: - NATIVE NOTIFICATION OBSERVER (ANSWER CALL)
-    @objc private func handleNativeCallAnswered(_ notification: Notification) {
-        if let userInfo = notification.userInfo,
-           let uuidStr = userInfo["uuid"] as? String {
-            let cleanUuid = uuidStr.lowercased()
-            print("📲 Native Call Answered Linker Hooked for UUID: \(cleanUuid)")
-            
-            if let channel = callChannel {
-                // If Flutter engine is completely initialized, invoke channel event
-                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": cleanUuid])
-                print("✅ Flutter notified via channel event: onNativeCallAnswered")
-            } else {
-                // 🔥 CRITICAL CACHE: If app is killed/locked, Flutter channel is nil. Save it!
-                print("⏳ Flutter not ready yet. Caching answered call event for UUID: \(cleanUuid)")
-                self.pendingAnsweredCallUUID = cleanUuid
-            }
-        }
-    }
 }

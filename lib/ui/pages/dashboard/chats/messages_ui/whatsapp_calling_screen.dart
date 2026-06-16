@@ -109,6 +109,19 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     }
 
     // ✅ Callbacks setup karo
+    // #changedWithJClaude — sync UI when native CallKit hardware controls change mute state
+    _callingService!.onMuteChanged = (muted) {
+      if (!mounted) return;
+      setState(() => _isMuted = muted);
+    };
+
+    // Sync speaker icon when native audio route changes (e.g. user taps speaker
+    // on the native CallKit screen or changes audio output in Control Center).
+    _callingService!.onSpeakerChanged = (enabled) {
+      if (!mounted) return;
+      setState(() => _isSpeaker = enabled);
+    };
+
     _callingService!.onStatusChange = (s) {
       if (!mounted || _isEnded) return;
       final statusLower = s.toLowerCase();
@@ -276,16 +289,19 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     return '${twoDigits(d.inMinutes)}:${twoDigits(d.inSeconds.remainder(60))}';
   }
 
-  void _toggleMute() {
-    setState(() => _isMuted = !_isMuted);
-    _callingService?.localStream
-        ?.getAudioTracks()
-        .forEach((t) => t.enabled = !_isMuted);
+  // #changedWithJClaude — mute the audio track AND sync the CallKit mute indicator
+  void _toggleMute() async {
+    final next = !_isMuted;
+    setState(() => _isMuted = next);
+    await _callingService?.setMuted(next);
     HapticFeedback.lightImpact();
   }
 
-  void _toggleSpeaker() {
-    setState(() => _isSpeaker = !_isSpeaker);
+  // #changedWithJClaude — actually route audio to speaker (previously only toggled a bool)
+  void _toggleSpeaker() async {
+    final next = !_isSpeaker;
+    setState(() => _isSpeaker = next);
+    await _callingService?.setSpeaker(next);
     HapticFeedback.lightImpact();
   }
 
@@ -350,6 +366,8 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
       _callingService?.onStatusChange = null;
       _callingService?.onCallEnded = null;
       _callingService?.onError = null;
+      _callingService?.onMuteChanged = null;
+      _callingService?.onSpeakerChanged = null;
     } else {
       _callingService?.dispose();
     }

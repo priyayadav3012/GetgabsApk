@@ -67,6 +67,15 @@ class WhatsAppCallingConfig {
   static const platform = MethodChannel('com.getgabs/calls');
 
   static Map<String, dynamic>? _pendingNavigation;
+  // #changedWithJClaude — prevents double-screen: multiple async paths (onNativeCallAnswered,
+  // AppLifecycleObserver.resumed, _checkInitialCall) can all call handlePendingCallNavigation()
+  // within the same 2-second window. Without this guard the second call stacks a new screen on
+  // top of the first, onCallEnded fires on the upper screen, it pops, user sees a flash.
+  static bool _callScreenOpen = false;
+  // UUID of the last call we started processing via onNativeCallAnswered or
+  // checkPendingAnsweredCall. Prevents the same answered call from being processed
+  // twice when both paths fire concurrently (tryNotifyFlutter + cached UUID poll).
+  static String? _lastProcessedAnswerUUID;
 
   // ============================================
   // ✅ FLAVOR CHECK — Android + iOS dono ke liye
@@ -148,6 +157,12 @@ class WhatsAppCallingConfig {
         final args2 = call.arguments as Map?;
         final uuid2 = args2?['uuid'] as String? ?? '';
 
+        if (uuid2.isNotEmpty && _lastProcessedAnswerUUID == uuid2) {
+          debugPrint('⚠️ Duplicate onNativeCallAnswered — already processing UUID $uuid2, skipping');
+          break;
+        }
+        if (uuid2.isNotEmpty) _lastProcessedAnswerUUID = uuid2;
+
         final prefs2 = await SharedPreferences.getInstance();
         final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
@@ -204,6 +219,24 @@ class WhatsAppCallingConfig {
         await svc2?.cleanupCall();
         break;
 
+      // #changedWithJClaude — CallKit hardware mute (Control Center, earphones) → update app UI
+      case 'onCallMuteChanged':
+        final muteArgs = call.arguments as Map?;
+        final muted = muteArgs?['muted'] as bool? ?? false;
+        debugPrint('🔇 Native mute changed: $muted');
+        GlobalCallListenerService.instance.service?.setMuted(muted, fromNative: true);
+        break;
+
+      // Forwarded from AVAudioSession.routeChangeNotification in CallManager.
+      // Fires whenever the user changes audio routing (earpiece ↔ speaker) from
+      // the native CallKit screen, Control Center, or connected accessories.
+      case 'onSpeakerChanged':
+        final speakerArgs = call.arguments as Map?;
+        final speakerEnabled = speakerArgs?['enabled'] as bool? ?? false;
+        debugPrint('🔊 Native speaker changed: $speakerEnabled');
+        GlobalCallListenerService.instance.service?.onSpeakerChanged?.call(speakerEnabled);
+        break;
+
       default:
         debugPrint('📞 Unhandled native method: ${call.method}');
     }
@@ -214,7 +247,15 @@ class WhatsAppCallingConfig {
     try {
       final result = await platform.invokeMethod('checkPendingAnsweredCall');
       if (result != null && result is Map && result['uuid'] != null) {
-        debugPrint('📲 Pending answered UUID from native: ${result['uuid']}');
+        final pendingUuid = result['uuid'] as String;
+        debugPrint('📲 Pending answered UUID from native: $pendingUuid');
+
+        if (_lastProcessedAnswerUUID == pendingUuid) {
+          debugPrint('⚠️ Duplicate checkPendingAnsweredCall — already processing UUID $pendingUuid, skipping');
+          return;
+        }
+        _lastProcessedAnswerUUID = pendingUuid;
+
         // Trigger same processing as onNativeCallAnswered
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
@@ -472,6 +513,16 @@ class WhatsAppCallingConfig {
   // ✅ Android: same behavior — safe hai
   // ============================================
   static Future<void> handlePendingCallNavigation() async {
+    // #changedWithJClaude — guard against double-open: multiple async paths fire within
+    // the same window (AppLifecycleObserver.resumed at 100 ms, onNativeCallAnswered, and
+    // _checkInitialCall at 2 s). Without this, a second screen stacks on top, steals the
+    // service callbacks, and immediately fails → user sees a flash then the screen pops.
+    if (_callScreenOpen) {
+      debugPrint('⚠️ Call screen already open — skipping duplicate navigation');
+      _pendingNavigation = null;
+      return;
+    }
+
     if (_pendingNavigation == null) {
       debugPrint('✅ No pending navigation — skipping');
       return;
@@ -486,6 +537,9 @@ class WhatsAppCallingConfig {
       return;
     }
 
+    // Set BEFORE the delay so any concurrent call that arrives during the 300 ms
+    // window sees the guard and exits rather than opening a second screen.
+    _callScreenOpen = true;
     await Future.delayed(const Duration(milliseconds: 300));
 
     debugPrint('🚀 Opening Calling Screen: ${nav['callerName']}');
@@ -501,7 +555,7 @@ class WhatsAppCallingConfig {
         isIncoming: true,
       ),
       transition: Transition.fadeIn,
-    );
+    )?.whenComplete(() => _callScreenOpen = false);
     // #changedWithJClaude — Do NOT clear prefs here. In killed state there is a race
     // between onNativeCallAnswered/checkPendingAnsweredCall setting the pending call on
     // the service and _checkInitialCall() re-initialising GlobalCallListenerService.

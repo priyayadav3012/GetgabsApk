@@ -83,6 +83,10 @@ class WhatsAppCallingService {
   Function()? onCallEnded;
   Function(String)? onError;
   Function(Map<String, dynamic>)? onIncomingCall;
+  // #changedWithJClaude — notified when mute state changes from native CallKit controls
+  Function(bool)? onMuteChanged;
+  // Notified when the audio route changes between earpiece and speaker (native → Flutter).
+  Function(bool)? onSpeakerChanged;
 
   static Future<String?> Function(String phoneNumber)? contactNameLookup;
 
@@ -162,6 +166,38 @@ class WhatsAppCallingService {
     currentCallId = callId;
     incomingSdp = sdp;
     debugPrint('✅ setPendingCall: callId=$callId');
+  }
+
+  // #changedWithJClaude — mute/unmute local audio track.
+  // fromNative=true when triggered by CallKit hardware (avoids re-sending to native).
+  // fromNative=false (default) when triggered by in-app UI — also syncs CallKit mute indicator.
+  Future<void> setMuted(bool muted, {bool fromNative = false}) async {
+    localStream?.getAudioTracks().forEach((t) => t.enabled = !muted);
+    if (fromNative) {
+      onMuteChanged?.call(muted);
+    }
+    if (!fromNative && Platform.isIOS) {
+      try {
+        await WhatsAppCallingConfig.platform.invokeMethod('setMuted', {'muted': muted});
+      } catch (e) {
+        debugPrint('⚠️ setMuted native error: $e');
+      }
+    }
+  }
+
+  // #changedWithJClaude — route audio to speaker or earpiece.
+  // On iOS: delegates to CallKit's RTCAudioSession (must be called after audio session is active).
+  // On Android: uses flutter_webrtc Helper directly.
+  Future<void> setSpeaker(bool enabled) async {
+    try {
+      if (Platform.isIOS) {
+        await WhatsAppCallingConfig.platform.invokeMethod('setSpeaker', {'enabled': enabled});
+      } else {
+        await Helper.setSpeakerphoneOn(enabled);
+      }
+    } catch (e) {
+      debugPrint('⚠️ setSpeaker error: $e');
+    }
   }
 
   // ============================================
@@ -313,7 +349,17 @@ class WhatsAppCallingService {
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
       } else if (isGlobalListener) {
-        await _showCallKitForIncoming(callData);
+        if (Platform.isIOS) {
+          // iOS: PushKit + native CallManager (CXProvider) already showed the
+          // CallKit UI via reportNewIncomingCall. Calling showCallkitIncoming here
+          // creates a SECOND CXProvider call with the same UUID. iOS immediately
+          // terminates the duplicate, which fires CallEventActionCallToggleAudioSession
+          // (isActive: false) — overriding the didActivate that just enabled audio
+          // and silencing the call. In-memory state is already set above; skip UI.
+          debugPrint('📞 iOS socket incoming: in-memory state updated, skipping duplicate CallKit UI');
+        } else {
+          await _showCallKitForIncoming(callData);
+        }
       } else {
         _showIncomingCallPopup(callData);
       }
@@ -480,6 +526,15 @@ class WhatsAppCallingService {
   Future<void> _showCallKitForIncoming(Map<String, dynamic> callData) async {
     if (_callKitShowing) {
       debugPrint('⚠️ CallKit already showing — skip');
+      return;
+    }
+    // #changedWithJClaude — if the call was already answered natively via CallManager's
+    // CXProvider (e.g. user tapped accept on the native CallKit UI before the socket
+    // delivered whatsapp_call_incoming), showing a second flutter_callkit_incoming UI
+    // with the same UUID causes iOS to emit CallEventActionCallEnded immediately for the
+    // "conflicting" call, which our handler interprets as a call end and closes the screen.
+    if (_callAccepted) {
+      debugPrint('⚠️ Call already accepted natively — skipping showCallkitIncoming to avoid UUID conflict');
       return;
     }
     _callKitShowing = true;
@@ -1347,6 +1402,16 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     widget.callingService.onError = (e) {
       if (mounted && !_isEnded) _handleCallEnded(e);
     };
+    widget.callingService.onMuteChanged = (muted) {
+      if (!mounted) return;
+      setState(() => _isMuted = muted);
+    };
+
+    // Sync speaker icon when native audio route changes.
+    widget.callingService.onSpeakerChanged = (enabled) {
+      if (!mounted) return;
+      setState(() => _isSpeaker = enabled);
+    };
 
     try {
       if (widget.pendingSdp == null || widget.pendingCallId == null) {
@@ -1381,6 +1446,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     widget.callingService.onStatusChange = null;
     widget.callingService.onCallEnded = null;
     widget.callingService.onError = null;
+    widget.callingService.onMuteChanged = null;
+    widget.callingService.onSpeakerChanged = null;
     super.dispose();
   }
 
@@ -1527,24 +1594,28 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                   child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
+                        // #changedWithJClaude — actually route audio to speaker via native/WebRTC
                         _buildControlButton(
                             _isSpeaker
                                 ? Icons.volume_up
                                 : Icons.volume_up_outlined,
                             'Speaker',
-                            _isSpeaker,
-                            () => setState(() => _isSpeaker = !_isSpeaker)),
+                            _isSpeaker, () async {
+                          final next = !_isSpeaker;
+                          setState(() => _isSpeaker = next);
+                          await widget.callingService.setSpeaker(next);
+                        }),
                         _buildControlButton(
                             Icons.videocam_off_outlined, 'Video', false, () {},
                             isDisabled: true),
+                        // #changedWithJClaude — sync mute to native CallKit so Control Center reflects it
                         _buildControlButton(
                             _isMuted ? Icons.mic_off : Icons.mic_none,
                             'Mute',
-                            _isMuted, () {
-                          setState(() => _isMuted = !_isMuted);
-                          widget.callingService.localStream
-                              ?.getAudioTracks()
-                              .forEach((t) => t.enabled = !_isMuted);
+                            _isMuted, () async {
+                          final next = !_isMuted;
+                          setState(() => _isMuted = next);
+                          await widget.callingService.setMuted(next);
                         }),
                       ]),
                 ),
@@ -1669,6 +1740,11 @@ class GlobalCallListenerService {
   WhatsAppCallingService? _service;
   bool _callScreenOpen = false;
   bool _isInitialized = false;
+  // Completer-based init lock: concurrent callers await the same future instead of being
+  // silently dropped. This prevents the case where onNativeCallAnswered starts initializing,
+  // checkPendingAnsweredCall is dropped entirely, and the first init finishes before
+  // setPendingCall() is called — leaving no one to retry if SDP was missing.
+  Completer<void>? _initCompleter;
   Map<String, dynamic>? pendingCall;
   StreamSubscription? _callkitSubscription;
 
@@ -1706,6 +1782,15 @@ class GlobalCallListenerService {
     required int adminId,
     required String businessApiKey,
   }) async {
+    // If an initialization is already in flight, join it rather than dropping the
+    // concurrent call. This prevents the silent-drop bug where onNativeCallAnswered
+    // starts initializing, checkPendingAnsweredCall is discarded entirely, and if
+    // the first init finishes before setPendingCall() runs, no one retries.
+    if (_initCompleter != null) {
+      debugPrint('⏳ GlobalListener already initializing — awaiting completion');
+      return _initCompleter!.future;
+    }
+
     // If already set up and a pending/active call is in progress, never tear
     // down — just reconnect the socket if it dropped. Tearing down here would
     // destroy the pending SDP that was stored before the user answered.
@@ -1725,6 +1810,7 @@ class GlobalCallListenerService {
       }
     }
 
+    _initCompleter = Completer<void>();
     debugPrint('🌐 GlobalListener initializing...');
 
     if (_service != null) {
@@ -1772,6 +1858,30 @@ class GlobalCallListenerService {
 
         _service?.setPendingCall(callId: callId, sdp: session['sdp']);
 
+        // #changedWithJClaude — store pending nav BEFORE the socket wait so the
+        // AppLifecycleObserver.resumed callback (fires 100 ms after foreground)
+        // can find it. Previously storePendingNavigation() was called AFTER
+        // the 2-second socket delay, so the lifecycle observer always missed it
+        // and the call screen never opened from the background path.
+        final bgUserId = await WhatsAppCallingConfig.getUserId();
+        final bgAdminId = await WhatsAppCallingConfig.getAdminId();
+        final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
+        final avatar =
+            'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+
+        if (!isAppInForeground) {
+          // Store nav so AppLifecycleObserver.resumed can open the screen at ~100 ms.
+          WhatsAppCallingConfig.storePendingNavigation({
+            'userId': bgUserId,
+            'adminId': bgAdminId,
+            'apiKey': bgApiKey,
+            'callerNumber': callerNumber,
+            'callerName': callerName,
+            'avatar': avatar,
+          });
+          debugPrint('✅ Pending navigation stored before socket wait — will open on foreground');
+        }
+
         if (_service?.socket?.connected != true) {
           _service?.socket?.connect();
           await Future.delayed(const Duration(seconds: 2));
@@ -1792,53 +1902,53 @@ class GlobalCallListenerService {
             callId: callId,
           );
         }
-
-        // #changedWithJClaude — Bug 4: removed answerCall() + _waitForSocketConnected +
-        // _quickAcceptToServer from the background path. getUserMedia() fails silently in
-        // iOS background (no active audio session), and the socket wait (up to 12 s) races
-        // the server timeout. Now we only store pending nav; the full WebRTC handshake runs
-        // in IncomingCallScreen.initState() once CallKit has activated the audio session.
-        // Also deleted the now-unused _waitForSocketConnected and _quickAcceptToServer helpers.
-        // BACKGROUND / KILLED
+        // BACKGROUND / KILLED — nav already stored above; nothing more to do here.
+        // The full WebRTC handshake (answerCall) runs in WhatsAppCallingScreen._initCall()
+        // once the app foregrounds and CallKit activates the audio session.
         else {
-          debugPrint('🔴 BACKGROUND FLOW — deferring WebRTC to foreground');
-
-          final bgUserId = await WhatsAppCallingConfig.getUserId();
-          final bgAdminId = await WhatsAppCallingConfig.getAdminId();
-          final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
-          final avatar =
-              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
-
-          // Store nav so AppLifecycleObserver.resumed opens the call screen.
-          // Do NOT call answerCall() here — iOS audio session is not active in
-          // background, getUserMedia() fails silently, and the SDP exchange
-          // would race against the server timeout before the UI even opens.
-          // The full WebRTC handshake runs in IncomingCallScreen.initState()
-          // once the app foregrounds and the audio session is activated by CallKit.
-          WhatsAppCallingConfig.storePendingNavigation({
-            'userId': bgUserId,
-            'adminId': bgAdminId,
-            'apiKey': bgApiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          });
-          debugPrint('✅ Pending navigation stored — will open on foreground');
+          debugPrint('🔴 BACKGROUND FLOW — screen will open via lifecycle observer');
         }
       } else if (event is CallEventActionCallTimeout) {
         debugPrint('📞 Call Timeout');
         await _service?.terminateCall();
       } else if (event is CallEventActionCallEnded) {
-        debugPrint('📞 Call Ended');
-        await _service?.terminateCall();
+        // #changedWithJClaude — guard against spurious CallEnded events that fire when
+        // _showCallKitForIncoming() calls showCallkitIncoming() with a UUID that
+        // CallManager already answered. iOS or flutter_callkit_incoming then immediately
+        // emits CallEnded for the "duplicate" call. Terminating here while the user's
+        // active call is in progress closes the call screen. Only terminate when no
+        // active/pending call is in progress.
+        if (_service?.isCallActive == true || _service?.callAccepted == true) {
+          debugPrint('📞 CallEnded event ignored — call is still active');
+        } else {
+          debugPrint('📞 Call Ended — terminating');
+          await _service?.terminateCall();
+        }
       } else if (event is CallEventActionCallToggleAudioSession) {
-        debugPrint('📞 Audio session toggled');
+        // On iOS: native CallManager's CXProvider owns RTCAudioSession exclusively
+        // via didActivate/didDeactivate. Calling setAudioEnabled from here races
+        // with didActivate — if isActive=false fires after didActivate set
+        // isAudioEnabled=true, the active call goes silent. Skip on iOS entirely;
+        // CallManager handles the full audio lifecycle natively.
+        // On Android: flutter_callkit_incoming is the CXProvider, so this is needed.
+        debugPrint('📞 Audio session toggled: isActive=${event.isActive}');
+        if (!Platform.isIOS) {
+          try {
+            await WhatsAppCallingConfig.platform.invokeMethod(
+              'setAudioEnabled', {'enabled': event.isActive});
+          } catch (e) {
+            debugPrint('⚠️ setAudioEnabled error: $e');
+          }
+        }
       } else {
         debugPrint('📞 Unhandled CallKit event: $event');
       }
     });
 
     _isInitialized = true;
+    final c = _initCompleter;
+    _initCompleter = null;
+    c?.complete();
     debugPrint('✅ GlobalCallListenerService initialized');
   }
 
