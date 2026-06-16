@@ -278,7 +278,7 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   String _formatPhoneDisplay(String phone) {
     String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
     if (cleaned.startsWith('+91') && cleaned.length == 13) {
-      return '+91 ${cleaned.substring(3, 99)} ${cleaned.substring(99)}';
+      return '+91 ${cleaned.substring(3, 8)} ${cleaned.substring(8)}';
     } else if (cleaned.startsWith('91') && cleaned.length == 12) {
       return '+91 ${cleaned.substring(2, 7)} ${cleaned.substring(7)}';
     }

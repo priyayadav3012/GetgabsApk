@@ -1,5 +1,5 @@
 // File: lib/domain/services/whatsapp_calling_service.dart
-// ✅ UNIFIED FILE — Works for both Android & iOS
+// ✅ FIXED — iOS audio issue + duplicate CallKit fix
 
 import 'dart:async';
 import 'dart:convert';
@@ -8,7 +8,6 @@ import 'dart:io' show Platform;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
-import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
@@ -16,7 +15,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide navigator;
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
-import 'package:getgabs/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'package:http/http.dart' as http;
@@ -37,20 +35,17 @@ class WhatsAppCallingService {
   MediaStream? localStream;
   MediaStream? remoteStream;
 
-  // ✅ iOS ke liye valid UUID store karna zaroori hai
   String? currentCallKitId;
 
   AudioPlayer? _ringtonePlayer;
   bool _isRinging = false;
   bool isGlobalListener = false;
 
-  // ✅ Duplicate CallKit screen rokne ke liye
   bool _callKitShowing = false;
 
   bool _isCallActive = false;
   bool get isCallActive => _isCallActive;
 
-  // ✅ Call accept ho gaya — socket event ignore karo
   bool _callAccepted = false;
   bool get callAccepted => _callAccepted;
 
@@ -150,27 +145,18 @@ class WhatsAppCallingService {
   }) {
     _pendingCallId = callId;
     _pendingSdp = sdp;
-    _hasActivePendingCall = true;
-    // ✅ iOS: _callAccepted = false (set hoga answerCall pe)
-    // ✅ Android: same behavior — foreground mein answerCall call karega
     currentCallId = callId;
     incomingSdp = sdp;
+    _hasActivePendingCall = true;
     debugPrint('✅ setPendingCall: callId=$callId');
   }
 
-  // ============================================
-  // HELPER — iOS ke liye valid UUID banana
-  // ============================================
   String _getValidCallKitId(String? id) {
     if (id == null || id.isEmpty) return _uuid.v4();
-
     final uuidRegex = RegExp(
       r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
     );
-
     if (uuidRegex.hasMatch(id)) return id;
-
-    // iOS ke liye string ko stable UUID mein convert karo
     return _uuid.v5(Uuid.NAMESPACE_URL, id);
   }
 
@@ -212,7 +198,7 @@ class WhatsAppCallingService {
     socket = IO.io(
       socketUrl,
       IO.OptionBuilder()
-          .setTransports(['polling']) // ✅ polling reliable fallback
+          .setTransports(['websocket', 'polling'])
           .setAuth({'userId': userId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
@@ -230,9 +216,17 @@ class WhatsAppCallingService {
       developer.log('📞 ========== INCOMING CALL ==========');
       developer.log('📞 Data: $data');
 
+      final incomingCallId = data['callId']?.toString() ?? '';
+
+      // callId dedup: currentCallId is set on first event, cleared on cleanupCall.
+      // Blocks duplicate events from socket reconnect replay or double sockets.
+      if (incomingCallId.isNotEmpty && incomingCallId == currentCallId) {
+        debugPrint('⚠️ Duplicate callId=$incomingCallId — ignoring');
+        return;
+      }
+
       if (_callAccepted) {
-        debugPrint(
-            '⚠️ Call already accepted — ignoring duplicate socket event');
+        debugPrint('⚠️ Call already accepted — ignoring duplicate socket event');
         return;
       }
 
@@ -253,12 +247,7 @@ class WhatsAppCallingService {
 
       if (callerName.isEmpty) {
         final nameFields = [
-          'callerName',
-          'caller_name',
-          'name',
-          'displayName',
-          'pushName',
-          'notify'
+          'callerName', 'caller_name', 'name', 'displayName', 'pushName', 'notify'
         ];
         for (String field in nameFields) {
           if (data[field] != null && data[field].toString().trim().isNotEmpty) {
@@ -330,7 +319,6 @@ class WhatsAppCallingService {
     socket!.on('call_accepted', (data) async {
       _cancelCallTimeout();
       _isCallActive = true;
-      callStartTime = DateTime.now();
       _updateStatus('Connected');
       if (peerConnection != null && data['sdp'] != null) {
         try {
@@ -341,7 +329,12 @@ class WhatsAppCallingService {
           }
         } catch (e) {}
       }
-      await _logCallStart();
+      // Guard: answerCall() already sets callStartTime + logs for incoming calls.
+      // Only log here for outgoing calls (where callStartTime is still null at this point).
+      if (callStartTime == null) {
+        callStartTime = DateTime.now();
+        await _logCallStart();
+      }
     });
 
     socket!.on('sdp_answer', (data) async {
@@ -448,8 +441,7 @@ class WhatsAppCallingService {
       _cancelCallTimeout();
     });
 
-    socket!
-        .onReconnect((_) => debugPrint('🔄 Socket reconnected: ${socket?.id}'));
+    socket!.onReconnect((_) => debugPrint('🔄 Socket reconnected: ${socket?.id}'));
     socket!.onReconnectError((e) => debugPrint('🔄 Reconnect error: $e'));
     socket!.onError((error) {
       debugPrint('❌ Socket error: $error');
@@ -458,15 +450,54 @@ class WhatsAppCallingService {
   }
 
   // ============================================
-  // CALLKIT — GLOBAL LISTENER KE LIYE
-  // ✅ iOS: UUID generate karta hai (required)
-  // ✅ Android: callId directly use karta hai + AndroidParams
+  // iOS-only: persist call data so onNativeCallAnswered can read SDP from prefs
+  // Called instead of _showCallKitForIncoming when native CallKit is already active
+  // ============================================
+  Future<void> _persistCallDataToPrefs(Map<String, dynamic> callData) async {
+    try {
+      final originalCallId = callData['callId']?.toString() ?? '';
+      final callerName = callData['callerName']?.toString() ?? '';
+      final callerNumber = callData['from']?.toString() ?? '';
+      final sdpOffer = callData['sdpOffer']?.toString() ?? _pendingSdp ?? '';
+
+      final callKitId = _getValidCallKitId(originalCallId);
+      currentCallKitId = callKitId;
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_call_id', originalCallId);
+      await prefs.setString('pending_callkit_id', callKitId);
+      await prefs.setString('pending_caller_name', callerName);
+      await prefs.setString('pending_caller_number', callerNumber);
+      await prefs.setString(
+        'pending_call_session',
+        jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}),
+      );
+      debugPrint('📞 iOS: call data persisted to prefs — callId=$originalCallId');
+    } catch (e) {
+      debugPrint('⚠️ iOS: _persistCallDataToPrefs error: $e');
+    }
+  }
+
+  // ============================================
+  // ✅ FIX 1 — CALLKIT SHOW: activeCalls check lagao
+  // iOS pe FCM already ek CallKit dikhata hai,
+  // agar active call pehle se hai to dobara mat dikhao
   // ============================================
   Future<void> _showCallKitForIncoming(Map<String, dynamic> callData) async {
     if (_callKitShowing) {
       debugPrint('⚠️ CallKit already showing — skip');
       return;
     }
+
+    // iOS: sirf native CXProvider (PushKit → AppDelegate → CallManager) CallKit UI handle karta hai.
+    // Flutter CallKit kabhi nahi dikhao iOS pe — race condition se double screen aata tha.
+    if (Platform.isIOS) {
+      debugPrint('🍏 iOS: Skipping Flutter CallKit — native CXProvider handles UI. Persisting prefs only.');
+      await _persistCallDataToPrefs(callData);
+      _callKitShowing = false;
+      return;
+    }
+
     _callKitShowing = true;
 
     try {
@@ -475,7 +506,7 @@ class WhatsAppCallingService {
       final callerNumber = callData['from']?.toString() ?? '';
       final sdpOffer = callData['sdpOffer']?.toString() ?? _pendingSdp ?? '';
 
-      // ✅ iOS: valid UUID chahiye CallKit ke liye
+      // ✅ iOS: valid UUID chahiye
       // ✅ Android: original callId theek hai
       final callKitId =
           Platform.isIOS ? _getValidCallKitId(originalCallId) : originalCallId;
@@ -511,9 +542,6 @@ class WhatsAppCallingService {
         handle: callerNumber,
         type: 0,
         duration: 60000,
-        // textAccept: 'Accept',
-        // textDecline: 'Decline',
-        // ✅ Android params — custom notification styling
         android: const AndroidParams(
           isCustomNotification: true,
           isShowLogo: false,
@@ -522,16 +550,17 @@ class WhatsAppCallingService {
           actionColor: '#034737',
           textColor: '#ffffff',
         ),
-        // ✅ iOS params — 'default' mode (voiceChat se error 561017449 aata tha)
+        // ✅ FIX 2 — iOS audio ke liye configureAudioSession: false
+        // WebRTC khud audio session manage karega answerCall() ke baad
         ios: const IOSParams(
           handleType: 'number',
           supportsVideo: false,
-          audioSessionMode: 'default',
-          supportsGrouping: false, // ✅ iOS Code 4 prevent karta hai
+          audioSessionMode: 'videoChat',
+          supportsGrouping: false,
           supportsUngrouping: false,
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
-          configureAudioSession: true,
+          configureAudioSession: false, // ✅ KEY FIX — WebRTC ko override karne do
         ),
       );
 
@@ -542,7 +571,6 @@ class WhatsAppCallingService {
       _showIncomingCallPopup(callData);
     }
 
-    // 65 sec baad reset (call timeout ke baad)
     Future.delayed(const Duration(seconds: 65), () => _callKitShowing = false);
   }
 
@@ -576,7 +604,6 @@ class WhatsAppCallingService {
 
   void _showIncomingCallPopup(Map<String, dynamic> callData) {
     if (_callAccepted) return;
-    print("call_haf_top_dialog");
     _startRingtone();
     Get.dialog(
       PopScope(
@@ -611,7 +638,6 @@ class WhatsAppCallingService {
   }
 
   void _openCallingScreenForIncoming(Map<String, dynamic> callData) {
-    debugPrint("call_full_dialog_incomming");
     final sdp = callData['sdpOffer'] ?? _pendingSdp;
     final callId = callData['callId'] ?? _pendingCallId;
     Get.to(
@@ -637,6 +663,21 @@ class WhatsAppCallingService {
       final callkitId =
           currentCallKitId ?? prefs.getString('pending_callkit_id');
 
+      // iOS: native CallKit ko bhi end karo (socket-terminated calls ke liye)
+      if (Platform.isIOS) {
+        try {
+          final nativeUUID = await WhatsAppCallingConfig.platform
+              .invokeMethod<String?>('getNativeCallUUID');
+          if (nativeUUID != null && nativeUUID.isNotEmpty) {
+            await WhatsAppCallingConfig.platform
+                .invokeMethod('endNativeCall', {'uuid': nativeUUID});
+            debugPrint('✅ iOS: native CallKit ended in _handleCallEnded (UUID: $nativeUUID)');
+          }
+        } catch (e) {
+          debugPrint('⚠️ iOS: endNativeCall in _handleCallEnded error: $e');
+        }
+      }
+
       if (callkitId != null && callkitId.isNotEmpty) {
         debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
         await FlutterCallkitIncoming.endCall(callkitId);
@@ -649,8 +690,6 @@ class WhatsAppCallingService {
       await prefs.remove('pending_caller_name');
       await prefs.remove('pending_caller_number');
       await prefs.remove('pending_callkit_id');
-
-      debugPrint('🧹 Pending call prefs cleared');
     } catch (e) {
       debugPrint('❌ CallKit cleanup error: $e');
     }
@@ -679,7 +718,7 @@ class WhatsAppCallingService {
       await prefs.remove('pending_call_session');
       await prefs.remove('pending_caller_name');
       await prefs.remove('pending_caller_number');
-      debugPrint('✅ SharedPreferences Cleared');
+      await prefs.remove('pending_from_user_id');
     } catch (e) {
       debugPrint('❌ Pref cleanup error: $e');
     }
@@ -710,6 +749,8 @@ class WhatsAppCallingService {
     _updateStatus('Ready');
   }
 
+  
+  
   Future<void> _createPeerConnection() async {
     try {
       if (localStream != null) {
@@ -760,17 +801,20 @@ class WhatsAppCallingService {
     };
   }
 
+  // ============================================
+  // ✅ FIX 3 — answerCall: iOS pe audio session
+  // CallKit activate hone ke baad thoda wait karo
+  // phir getUserMedia call karo
+  // ============================================
   Future<void> answerCall() async {
-    print("call_answerrrrrrrrrrrrrrrrrrrrrrrrrrrrr");
+    debugPrint('📞 answerCall() called');
 
     if (_callAccepted) {
       debugPrint('⚠️ CALL ALREADY ACCEPTED');
       return;
     }
 
-    if (!_hasActivePendingCall ||
-        _pendingSdp == null ||
-        _pendingCallId == null) {
+    if (!_hasActivePendingCall || _pendingSdp == null || _pendingCallId == null) {
       throw Exception('No active incoming call');
     }
 
@@ -783,16 +827,43 @@ class WhatsAppCallingService {
     _callAccepted = true;
 
     await _requestPermissions();
+
+    // ✅ FIX: iOS pe CallKit audio session activate hone ke liye 500ms wait karo
+    // Bina is delay ke WebRTC audio session ko override karta hai CallKit se
+    // Result: call connect hoti hai lekin audio nahi aata
+    if (Platform.isIOS) {
+      debugPrint('⏳ iOS: Waiting for CallKit audio session to activate...');
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
     await _createPeerConnection();
 
-    localStream = await webrtc.navigator.mediaDevices.getUserMedia({
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true
-      },
-      'video': false,
-    }).timeout(const Duration(seconds: 10));
+    // ✅ iOS audio constraints — echoCancellation iOS pe crash kar sakta hai
+    // isSpecific constraints use karo
+    final audioConstraints = Platform.isIOS
+        ? {
+            'audio': {
+              'mandatory': {
+                'googEchoCancellation': 'true',
+                'googNoiseSuppression': 'true',
+                'googAutoGainControl': 'true',
+              },
+              'optional': [],
+            },
+            'video': false,
+          }
+        : {
+            'audio': {
+              'echoCancellation': true,
+              'noiseSuppression': true,
+              'autoGainControl': true,
+            },
+            'video': false,
+          };
+
+    localStream = await webrtc.navigator.mediaDevices
+        .getUserMedia(audioConstraints)
+        .timeout(const Duration(seconds: 10));
 
     for (var track in localStream!.getTracks()) {
       peerConnection!.addTrack(track, localStream!);
@@ -802,6 +873,11 @@ class WhatsAppCallingService {
         .setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
     RTCSessionDescription answer = await peerConnection!.createAnswer();
     await peerConnection!.setLocalDescription(answer);
+
+    // ✅ iOS pe ICE gathering ke liye thoda aur wait karo
+    if (Platform.isIOS) {
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
 
     final response = await http
         .post(
@@ -820,13 +896,21 @@ class WhatsAppCallingService {
       throw Exception('Failed to answer: ${response.statusCode}');
     }
 
+    if (Platform.isIOS) {
+      try {
+        await WhatsAppCallingConfig.platform.invokeMethod('setupAudioSession');
+        debugPrint('✅ iOS: Audio session configured for WebRTC.');
+      } catch (e) {
+        debugPrint('⚠️ Audio setup error: $e');
+      }
+    }
+
     _updateStatus('Connected');
     callStartTime = DateTime.now();
     await _logCallStart();
   }
 
   Future<void> makeCall(String phoneNumber) async {
-    print("call_make_callllllllllllllllllllllllllllllllll");
     debugPrint('🔌 Socket connected? ${socket?.connected}');
 
     String formattedPhone = _formatPhoneNumber(phoneNumber);
@@ -857,14 +941,40 @@ class WhatsAppCallingService {
     _updateStatus('Calling...');
     _startCallTimeout();
 
-    localStream = await webrtc.navigator.mediaDevices.getUserMedia({
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true
-      },
-      'video': false,
-    }).timeout(const Duration(seconds: 10));
+    final audioConstraints = Platform.isIOS
+        ? {
+            'audio': {
+              'mandatory': {
+                'googEchoCancellation': 'true',
+                'googNoiseSuppression': 'true',
+                'googAutoGainControl': 'true',
+              },
+              'optional': [],
+            },
+            'video': false,
+          }
+        : {
+            'audio': {
+              'echoCancellation': true,
+              'noiseSuppression': true,
+              'autoGainControl': true,
+            },
+            'video': false,
+          };
+
+    localStream = await webrtc.navigator.mediaDevices
+        .getUserMedia(audioConstraints)
+        .timeout(const Duration(seconds: 10));
+
+    // Early exit: agar getUserMedia ke dauran user ne call khatam ki
+    if (!_isCallActive) {
+      for (var track in localStream!.getTracks()) {
+        await track.stop();
+      }
+      await localStream!.dispose();
+      localStream = null;
+      return;
+    }
 
     for (var track in localStream!.getTracks()) {
       peerConnection!.addTrack(track, localStream!);
@@ -876,8 +986,7 @@ class WhatsAppCallingService {
 
     await Future.delayed(const Duration(seconds: 2));
 
-    RTCSessionDescription? localDesc =
-        await peerConnection!.getLocalDescription();
+    RTCSessionDescription? localDesc = await peerConnection!.getLocalDescription();
     String sdpOffer = localDesc?.sdp ?? offer.sdp ?? '';
 
     if (sdpOffer.isEmpty) {
@@ -906,6 +1015,22 @@ class WhatsAppCallingService {
     }
 
     final data = jsonDecode(response.body);
+
+    // ⚠️ User ne HTTP POST ke during call terminate kar di ho sakti hai
+    // us waqt currentCallId null tha → terminateCall() server tak pahunchi nahi
+    // Ab callId mila hai — agar _isCallActive false hai to abhi terminate karo
+    if (!_isCallActive) {
+      debugPrint('⚠️ Call terminated during makeCall HTTP — sending server terminate now: ${data['callId']}');
+      try {
+        await http.post(
+          Uri.parse('$socketUrl/terminate-whatsapp-call'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'callId': data['callId'], 'api_key': businessApiKey}),
+        ).timeout(const Duration(seconds: 5));
+      } catch (_) {}
+      return;
+    }
+
     currentCallId = data['callId'];
     _updateStatus('Ringing...');
   }
@@ -935,6 +1060,22 @@ class WhatsAppCallingService {
         }
       }
 
+      // iOS: end the native CallKit call reported by PushKit via AppDelegate.
+      // FlutterCallkitIncoming.endCall() only works for Flutter-reported calls.
+      if (Platform.isIOS) {
+        try {
+          final nativeUUID = await WhatsAppCallingConfig.platform
+              .invokeMethod<String?>('getNativeCallUUID');
+          if (nativeUUID != null && nativeUUID.isNotEmpty) {
+            await WhatsAppCallingConfig.platform
+                .invokeMethod('endNativeCall', {'uuid': nativeUUID});
+            debugPrint('✅ iOS: native CallKit call ended (UUID: $nativeUUID)');
+          }
+        } catch (e) {
+          debugPrint('⚠️ iOS: endNativeCall error: $e');
+        }
+      }
+
       if (callkitId != null && callkitId.isNotEmpty) {
         try {
           await FlutterCallkitIncoming.endCall(callkitId);
@@ -945,6 +1086,9 @@ class WhatsAppCallingService {
 
       await stopRingtone();
       await cleanupCall();
+      // Immediately notify UI so the call screen updates and timer stops.
+      // Without this, the UI waits for a socket event that may never arrive.
+      onCallEnded?.call();
     } finally {
       _isCleaningUp = false;
     }
@@ -1233,17 +1377,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
         AnimationController(duration: const Duration(seconds: 2), vsync: this)
           ..repeat();
 
-    // ✅ iOS: postFrameCallback use karo + foreground check
-    // ✅ Android: direct answerCall
-    if (Platform.isIOS) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground && !widget.callingService.callAccepted) {
-          await _answerCall();
-        }
-      });
-    } else {
-      _answerCall();
-    }
+    // ✅ iOS aur Android dono ke liye postFrameCallback use karo
+    // Ye ensure karta hai ki UI render ho chuki hai answerCall se pehle
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!widget.callingService.callAccepted) {
+        await _answerCall();
+      }
+    });
   }
 
   String _getInitials(String name, String number) {
@@ -1646,7 +1786,6 @@ class GlobalCallListenerService {
   bool _callScreenOpen = false;
   bool _isInitialized = false;
   Map<String, dynamic>? pendingCall;
-  StreamSubscription? _callkitSubscription;
 
   WhatsAppCallingService? get service => _service;
 
@@ -1674,64 +1813,25 @@ class GlobalCallListenerService {
     )?.then((_) => _callScreenOpen = false);
   }
 
-// --- Insert into GlobalCallListenerService class ---
-  Future<bool> _waitForSocketConnected(WhatsAppCallingService svc,
-      {int timeoutMs = 12000}) async {
-    const int stepMs = 300;
-    int waited = 0;
-
-    // ensure socket exists and attempt connect
-    try {
-      if (svc.socket == null) {
-        await svc.initialize();
-      } else {
-        svc.socket?.connect();
-      }
-    } catch (_) {}
-
-    while ((svc.socket == null || svc.socket!.connected != true) &&
-        waited < timeoutMs) {
-      await Future.delayed(Duration(milliseconds: stepMs));
-      waited += stepMs;
-    }
-
-    return svc.socket?.connected == true;
-  }
-
-  Future<void> _quickAcceptToServer(
-      String callId, int userId, String apiKey) async {
-    try {
-      final resp = await http
-          .post(
-            Uri.parse(
-                '${WhatsAppCallingService.socketUrl}/accept-whatsapp-call'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'callId': callId,
-              'acceptedBy': userId,
-              'api_key': apiKey,
-              'quickAccept': true
-            }),
-          )
-          .timeout(const Duration(seconds: 8));
-
-      debugPrint('🔔 quickAccept response: ${resp.statusCode} ${resp.body}');
-    } catch (e) {
-      debugPrint('❌ quickAccept failed: $e');
-    }
-  }
-
   Future<void> initialize({
     required int userId,
     required int adminId,
     required String businessApiKey,
   }) async {
-    if (_isInitialized && (_service?.socket?.connected == true)) {
-      debugPrint('✅ GlobalListener already active');
+    // If already initialized, NEVER recreate the service — only reconnect the socket.
+    // Recreating tears down the old socket which may auto-reconnect before disposal,
+    // leaving two active sockets that both receive 'whatsapp_call_incoming' → double calls.
+    if (_isInitialized && _service != null) {
+      if (_service?.socket?.connected != true) {
+        debugPrint('🔄 GlobalListener: socket not connected — reconnecting (no reinit)');
+        try { _service?.socket?.connect(); } catch (_) {}
+      } else {
+        debugPrint('✅ GlobalListener already active');
+      }
       return;
     }
 
-    debugPrint('🌐 GlobalListener initializing...');
+    debugPrint('🌐 GlobalListener fresh initialization...');
 
     if (_service != null) {
       _service!.onStatusChange = null;
@@ -1744,7 +1844,6 @@ class GlobalCallListenerService {
       _service = null;
     }
 
-    await _callkitSubscription?.cancel();
     _isInitialized = false;
 
     _service = WhatsAppCallingService(
@@ -1756,127 +1855,15 @@ class GlobalCallListenerService {
     _service!.isGlobalListener = true;
     await _service!.initialize();
 
-    // ============================================
-    // CALLKIT EVENT LISTENER
-    // ============================================
-    _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
-      debugPrint('📞 CallKit EVENT: $event');
-
-      // ✅ v3.0.0 — sealed class pattern (Event enum removed)
-      if (event is CallEventActionCallAccept) {
-        debugPrint('📞 ACCEPT CLICKED');
-
-        final prefs = await SharedPreferences.getInstance();
-        final callId = prefs.getString('pending_call_id');
-        final sessionString = prefs.getString('pending_call_session');
-        final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
-
-        if (callId == null || sessionString == null) return;
-
-        final session = jsonDecode(sessionString);
-
-        _service?.setPendingCall(callId: callId, sdp: session['sdp']);
-
-        if (_service?.socket?.connected != true) {
-          _service?.socket?.connect();
-          await Future.delayed(const Duration(seconds: 2));
-        }
-
-        // ✅ FOREGROUND
-        if (isAppInForeground) {
-          debugPrint('🟢 FOREGROUND FLOW');
-          if (_callScreenOpen) {
-            debugPrint('⚠️ Screen already open');
-            return;
-          }
-          openCallScreen(
-            service: _service!,
-            callerName: callerName,
-            callerNumber: callerNumber,
-            sdp: session['sdp'],
-            callId: callId,
-          );
-        }
-
-        // ✅ BACKGROUND / KILLED
-        else {
-          debugPrint('🔴 BACKGROUND FLOW');
-
-          final bgUserId = await WhatsAppCallingConfig.getUserId();
-          final bgAdminId = await WhatsAppCallingConfig.getAdminId();
-          final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
-          final avatar =
-              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
-
-          WhatsAppCallingConfig.storePendingNavigation({
-            'userId': bgUserId,
-            'adminId': bgAdminId,
-            'apiKey': bgApiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          });
-          // if (_service?.socket?.connected != true) {
-          //   _service?.socket?.connect();
-          //   await Future.delayed(const Duration(seconds: 2));
-          // }
-          // if (!(_service?.callAccepted ?? false)) {
-          //   try {
-          //     await _service?.answerCall();
-          //     debugPrint('✅ Call answered in background');
-          //   } catch (e) {
-          //     debugPrint('❌ Background answerCall error: $e');
-          //   }
-          // }
-
-          bool connected = false;
-          try {
-            connected =
-                await _waitForSocketConnected(_service!, timeoutMs: 12000);
-          } catch (e) {
-            debugPrint('🔎 waitForSocket error: $e');
-            connected = false;
-          }
-
-          if (connected) {
-            debugPrint('✅ Socket connected — attempting background answer');
-            if (!(_service?.callAccepted ?? false)) {
-              try {
-                await _service?.answerCall();
-                debugPrint('✅ Call answered in background via socket');
-              } catch (e) {
-                debugPrint(
-                    '❌ Background answerCall error (socket): $e — falling back to quickAccept');
-                await _quickAcceptToServer(callId, bgUserId, bgApiKey);
-              }
-            }
-          } else {
-            debugPrint(
-                '⏳ Socket not connected within timeout — performing quickAccept fallback');
-            await _quickAcceptToServer(callId, bgUserId, bgApiKey);
-            // UI and full SDP exchange will finish when app foregrounds.
-          }
-        }
-      } else if (event is CallEventActionCallTimeout) {
-        debugPrint('📞 Call Timeout');
-        await _service?.terminateCall();
-      } else if (event is CallEventActionCallEnded) {
-        debugPrint('📞 Call Ended');
-        await _service?.terminateCall();
-      } else if (event is CallEventActionCallToggleAudioSession) {
-        debugPrint('📞 Audio session toggled');
-      } else {
-        debugPrint('📞 Unhandled CallKit event: $event');
-      }
-    });
-
+    // CallKit events are handled exclusively by:
+    // - iOS: native CXProvider + MethodChannel (onNativeCallAnswered in initMethodChannel)
+    // - Android: setupCallKitEvents() in WhatsAppCallingConfig (called once in main())
+    // A second listener here caused double-screen on Android (two simultaneous navigations).
     _isInitialized = true;
     debugPrint('✅ GlobalCallListenerService initialized');
   }
 
   void dispose() {
-    _callkitSubscription?.cancel();
     _service?.dispose();
     _service = null;
     _isInitialized = false;

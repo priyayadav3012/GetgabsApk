@@ -67,6 +67,7 @@ class WhatsAppCallingConfig {
   static const platform = MethodChannel('com.getgabs/calls');
 
   static Map<String, dynamic>? _pendingNavigation;
+  static bool _isNavigatingToCall = false;
 
   // ============================================
   // ✅ FLAVOR CHECK — Android + iOS dono ke liye
@@ -91,8 +92,6 @@ class WhatsAppCallingConfig {
  static void initMethodChannel() {
   if (!Platform.isIOS) return;
 
-  FlutterCallkitIncoming.endAllCalls();
-
   platform.setMethodCallHandler((call) async {
     debugPrint('📲 Native Method: ${call.method}');
 
@@ -100,6 +99,16 @@ class WhatsAppCallingConfig {
       case 'onVoipTokenReceived':
         final token = call.arguments as String?;
         debugPrint('📱 VoIP Token: $token');
+        break;
+
+      case 'onAudioSessionActivated':
+        debugPrint('🎵 [Flutter] CallKit audio session activated — WebRTC audio ready.');
+        // flutter_webrtc internally manages its audio session via getUserMedia.
+        // This event confirms CallKit has handed audio control — no extra action needed.
+        break;
+
+      case 'onAudioSessionDeactivated':
+        debugPrint('🔇 [Flutter] CallKit audio session deactivated.');
         break;
 
       case 'onIncomingVoipCall':
@@ -186,16 +195,21 @@ class WhatsAppCallingConfig {
           'avatar': avatar,
         });
 
-        if (isAppInForeground) {
-          await handlePendingCallNavigation();
-        }
+        // Always attempt navigation — handlePendingCallNavigation stores back if
+        // Get.context is null (app still loading) and AppLifecycleObserver retries it.
+        // Skipping on !isAppInForeground caused missed navigation when applicationDidBecomeActive
+        // delivered the answer before Flutter's lifecycle event updated isAppInForeground.
+        await handlePendingCallNavigation();
         break;
 
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
-        await FlutterCallkitIncoming.endAllCalls();
         final svc2 = GlobalCallListenerService.instance.service;
-        await svc2?.cleanupCall();
+        if (svc2 != null) {
+          await svc2.terminateCall();
+        } else {
+          await FlutterCallkitIncoming.endAllCalls();
+        }
         break;
 
       default:
@@ -480,6 +494,12 @@ class WhatsAppCallingConfig {
       return;
     }
 
+    if (_isNavigatingToCall) {
+      debugPrint('⚠️ handlePendingCallNavigation: navigation already in progress — skipping');
+      return;
+    }
+    _isNavigatingToCall = true;
+
     await Future.delayed(const Duration(milliseconds: 300));
 
     debugPrint('🚀 Opening Calling Screen: ${nav['callerName']}');
@@ -496,6 +516,7 @@ class WhatsAppCallingConfig {
       ),
       transition: Transition.fadeIn,
     );
+    _isNavigatingToCall = false;
 
     final prefs = await SharedPreferences.getInstance();
     await _clearCallPrefs(prefs);
@@ -579,8 +600,8 @@ class WhatsAppCallingConfig {
     required VoidCallback onDecline,
   }) {
     Get.dialog(
-      WillPopScope(
-        onWillPop: () async => false,
+      PopScope(
+        canPop: false,
         child: Material(
           color: Colors.black54,
           child: SafeArea(
