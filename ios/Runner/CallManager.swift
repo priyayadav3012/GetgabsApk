@@ -19,7 +19,12 @@ import WebRTC
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
         config.includesCallsInRecents = false
-        config.ringtoneSound = "ringtone.caf"
+        // nil = use iOS system default ringtone.
+        // "ringtone.caf" was set here but the file was never added to the Xcode
+        // bundle, causing CallKit to show an incoming call UI with no audio.
+        // To use a custom ringtone: add the .caf file to the Xcode project's
+        // Copy Bundle Resources phase and restore: config.ringtoneSound = "ringtone.caf"
+        config.ringtoneSound = nil
 
         if let image = UIImage(named: "IconMask") {
             config.iconTemplateImageData = image.pngData()
@@ -70,11 +75,23 @@ import WebRTC
     public func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         print("📞 Call Answered in Native CallManager")
 
-        // Fulfill immediately so OS unlocks audio session processing
+        // Fulfill first — this tells CallKit the answer was accepted and triggers
+        // provider(_:didActivate:) asynchronously.  Audio session configuration
+        // is deferred to didActivate so it runs after the system has activated the
+        // session (see H-2 fix).
         action.fulfill()
 
         let uuid = action.callUUID.uuidString.lowercased()
-        setupAudioSession()
+
+        // Post CALL_ANSWERED_NATIVE so AppDelegate.handleNativeCallAnswered can cache
+        // the UUID in pendingAnsweredCallUUID if the Flutter engine isn't ready yet.
+        // tryNotifyFlutter retries for up to 10 s; the AppDelegate observer is the
+        // last-resort cache path if all 20 retries are exhausted before Dart starts.
+        NotificationCenter.default.post(
+            name: NSNotification.Name("CALL_ANSWERED_NATIVE"),
+            object: nil,
+            userInfo: ["uuid": uuid]
+        )
 
         // Retry loop: Flutter engine may not be ready yet (especially in killed state).
         // We retry every 0.5s up to 20 times (10s total).
@@ -131,7 +148,11 @@ import WebRTC
 
     // MARK: - AUDIO ACTIVATED
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        print("🔊 Audio Session Activated")
+        print("🔊 Audio Session Activated by CallKit")
+        // Configure WebRTC audio session HERE — after CallKit has activated the session.
+        // Calling setConfiguration before activation (e.g. in the answer action) races
+        // with the system and can silently fail or produce distorted audio.
+        setupAudioSession()
         let rtcSession = RTCAudioSession.sharedInstance()
         rtcSession.audioSessionDidActivate(audioSession)
         rtcSession.isAudioEnabled = true

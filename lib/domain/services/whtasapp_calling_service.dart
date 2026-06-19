@@ -218,7 +218,7 @@ class WhatsAppCallingService {
     socket = IO.io(
       socketUrl,
       IO.OptionBuilder()
-          .setTransports(['polling']) // ✅ polling reliable fallback
+          .setTransports(['polling'])
           .setAuth({'userId': userId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
@@ -450,7 +450,8 @@ class WhatsAppCallingService {
       // #changedWithJClaude — flush any ICE candidates that were generated while the
       // socket was still reconnecting after a background→foreground transition.
       if (_bufferedIceCandidates.isNotEmpty) {
-        debugPrint('🚀 Flushing ${_bufferedIceCandidates.length} buffered ICE candidates');
+        debugPrint(
+            '🚀 Flushing ${_bufferedIceCandidates.length} buffered ICE candidates');
         for (final payload in _bufferedIceCandidates) {
           socket!.emit('ice_candidate', payload);
         }
@@ -664,6 +665,7 @@ class WhatsAppCallingService {
       await prefs.remove('pending_caller_name');
       await prefs.remove('pending_caller_number');
       await prefs.remove('pending_callkit_id');
+      await prefs.remove('pending_from_user_id');
 
       debugPrint('🧹 Pending call prefs cleared');
     } catch (e) {
@@ -694,6 +696,7 @@ class WhatsAppCallingService {
       await prefs.remove('pending_call_session');
       await prefs.remove('pending_caller_name');
       await prefs.remove('pending_caller_number');
+      await prefs.remove('pending_from_user_id');
       debugPrint('✅ SharedPreferences Cleared');
     } catch (e) {
       debugPrint('❌ Pref cleanup error: $e');
@@ -767,7 +770,8 @@ class WhatsAppCallingService {
         socket!.emit('ice_candidate', payload);
       } else {
         _bufferedIceCandidates.add(payload);
-        debugPrint('📦 ICE candidate buffered (socket not ready): ${_bufferedIceCandidates.length} queued');
+        debugPrint(
+            '📦 ICE candidate buffered (socket not ready): ${_bufferedIceCandidates.length} queued');
       }
     };
 
@@ -1715,7 +1719,8 @@ class GlobalCallListenerService {
           _service!.socket?.connect();
           debugPrint('🔄 GlobalListener: socket reconnected for active call');
         } else {
-          debugPrint('✅ GlobalListener already active with pending call — skipping reinit');
+          debugPrint(
+              '✅ GlobalListener already active with pending call — skipping reinit');
         }
         return;
       }
@@ -1836,7 +1841,11 @@ class GlobalCallListenerService {
       } else {
         debugPrint('📞 Unhandled CallKit event: $event');
       }
-    });
+    }, onError: (e, stack) {
+      // flutter_callkit_incoming throws FormatException for ACTION_CALL_TOGGLE_AUDIO_SESSION
+      // when iOS fires it without an id — swallow the error so the subscription stays alive.
+      debugPrint('⚠️ CallKit stream error (ignored): $e');
+    }, cancelOnError: false);
 
     _isInitialized = true;
     debugPrint('✅ GlobalCallListenerService initialized');

@@ -94,7 +94,7 @@ import FirebaseMessaging
         voipRegistry?.delegate = self
         voipRegistry?.desiredPushTypes = [.voIP]
 
-        // 1. Native Call End Lifecycle Linker
+        // Call-end observer: fired by CallManager when the user ends via CallKit.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleNativeCallEnd(_:)),
@@ -102,7 +102,10 @@ import FirebaseMessaging
             object: nil
         )
 
-        // 2. NATIVE CALL ANSWER LIFECYCLE LINKER
+        // Call-answer observer: fired by CallManager when the user answers via CallKit.
+        // CallManager.tryNotifyFlutter() already handles retrying the channel call; this
+        // observer provides the fallback cache path (pendingAnsweredCallUUID) for very
+        // slow engine starts where all 20 retries are exhausted before Dart is ready.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleNativeCallAnswered(_:)),
@@ -116,10 +119,12 @@ import FirebaseMessaging
     }
 
     private func retriggerVoipRegistration() {
-        voipRegistry = nil
-        voipRegistry = PKPushRegistry(queue: DispatchQueue.main)
-        voipRegistry?.delegate = self
-        voipRegistry?.desiredPushTypes = [.voIP]
+        // Create the new registry BEFORE releasing the old one to avoid a brief
+        // window where voipRegistry == nil and an incoming VoIP push would be lost.
+        let newRegistry = PKPushRegistry(queue: DispatchQueue.main)
+        newRegistry.delegate = self
+        newRegistry.desiredPushTypes = [.voIP]
+        voipRegistry = newRegistry  // old registry released only after new one is set
     }
 
     // MARK: - VOIP TOKEN RECEIVED
@@ -152,7 +157,13 @@ import FirebaseMessaging
         let data = payload.dictionaryPayload
         print("📦 Payload Data: \(data)")
 
-        let rawUuidString = data["uuid"] as? String ?? UUID().uuidString
+        // Server now sends a stable UUID v5 derived from call_id (same algorithm as
+        // Flutter's _getValidCallKitId).  Fall back to UUID().uuidString only when the
+        // field is absent (older server versions), ensuring both push paths always share
+        // the same UUID for a given call.
+        let rawUuidString = (data["uuid"] as? String)?.lowercased()
+            ?? (data["call_id"] as? String)?.lowercased()
+            ?? UUID().uuidString
         let uuidString = rawUuidString.lowercased()
 
         // Support both camelCase and snake_case field names from server
@@ -170,15 +181,17 @@ import FirebaseMessaging
         // Persist call metadata into NSUserDefaults so Flutter's SharedPreferences
         // (which maps to NSUserDefaults on iOS) can read SDP/callId at answer time.
         // This is the single source of truth for killed-state call data.
+        // SharedPreferences on iOS (shared_preferences_foundation v2.x) prefixes every
+        // key with "flutter." before writing to NSUserDefaults.  Writing plain keys here
+        // means Flutter can never read them.  Use the same prefix so both sides share data.
         let defaults = UserDefaults.standard
-        defaults.set(callId, forKey: "pending_call_id")
-        defaults.set(callerName, forKey: "pending_caller_name")
-        defaults.set(callerNumber, forKey: "pending_caller_number")
-        defaults.set(uuidString, forKey: "pending_callkit_id")
+        defaults.set(callId,      forKey: "flutter.pending_call_id")
+        defaults.set(callerName,  forKey: "flutter.pending_caller_name")
+        defaults.set(callerNumber,forKey: "flutter.pending_caller_number")
+        defaults.set(uuidString,  forKey: "flutter.pending_callkit_id")
         if !sessionRaw.isEmpty {
-            defaults.set(sessionRaw, forKey: "pending_call_session")
+            defaults.set(sessionRaw, forKey: "flutter.pending_call_session")
         }
-        defaults.synchronize()
         print("📦 Call metadata written to NSUserDefaults for killed-state recovery")
 
         guard let uuid = UUID(uuidString: uuidString) else {

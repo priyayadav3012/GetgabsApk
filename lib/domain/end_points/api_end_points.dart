@@ -4,6 +4,8 @@
 import 'dart:convert';
 import 'dart:io' show Platform;
 
+import 'package:firebase_messaging/firebase_messaging.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
@@ -105,7 +107,21 @@ class WhatsAppCallingConfig {
     switch (call.method) {
       case 'onVoipTokenReceived':
         final token = call.arguments as String?;
+        if (token == null || token.isEmpty) break;
         debugPrint('📱 VoIP Token: $token');
+        _syncVoipTokenToServer(token);
+        break;
+
+      case 'onVoipTokenInvalid':
+        // Old token is no longer valid — request a fresh one from PushKit.
+        // Native side will re-register and fire onVoipTokenReceived with the
+        // new token, which then syncs it to the server automatically.
+        debugPrint('❌ VoIP token invalidated — requesting fresh token');
+        try {
+          await platform.invokeMethod('getVoipTokenForcefully');
+        } catch (e) {
+          debugPrint('❌ getVoipTokenForcefully error: $e');
+        }
         break;
 
       case 'onIncomingVoipCall':
@@ -168,7 +184,18 @@ class WhatsAppCallingConfig {
           break;
         }
 
-        await initializeCallListener();
+        // Do NOT call initializeCallListener() here — it tears down and recreates
+        // GlobalCallListenerService (running cleanupCall which wipes SharedPreferences
+        // and clears hasActivePendingCall) before WhatsAppCallingScreen can read them.
+        // Only initialise if no service exists yet; otherwise reuse and reconnect socket.
+        final existingSvc = GlobalCallListenerService.instance.service;
+        if (existingSvc == null || !GlobalCallListenerService.instance.isInitialized) {
+          await initializeCallListener();
+        } else if (existingSvc.socket?.connected != true) {
+          existingSvc.socket?.connect();
+          debugPrint('🔄 onNativeCallAnswered: socket reconnected, service reused');
+        }
+
         final svc = GlobalCallListenerService.instance.service;
         if (svc != null) {
           svc.setPendingCall(callId: callId2, sdp: sdp2);
@@ -209,8 +236,10 @@ class WhatsAppCallingConfig {
     }
   });
 
-  // Check if AppDelegate cached an answered call while Flutter wasn't ready
-  Future<void>.delayed(Duration.zero, () async {
+  // Check if AppDelegate cached an answered call while Flutter wasn't ready.
+  // Delay slightly so the Dart isolate has processed its first frame before
+  // we invoke the channel — invokeMethod on an unready channel is silently dropped.
+  Future<void>.delayed(const Duration(milliseconds: 300), () async {
     try {
       final result = await platform.invokeMethod('checkPendingAnsweredCall');
       if (result != null && result is Map && result['uuid'] != null) {
@@ -260,7 +289,60 @@ class WhatsAppCallingConfig {
       debugPrint('❌ checkPendingAnsweredCall error: $e');
     }
   });
-} // ============================================
+}
+
+  // ============================================
+  // VOIP TOKEN SYNC
+  // ============================================
+
+  // Holds a token that arrived before the user logged in so it can be flushed
+  // once credentials are available (called from login success flow).
+  static String? _pendingVoipToken;
+
+  /// Call this after a successful login to ensure any token that arrived before
+  /// credentials were ready gets synced to the server.
+  static Future<void> flushPendingVoipToken() async {
+    final token = _pendingVoipToken;
+    if (token == null) return;
+    _pendingVoipToken = null;
+    debugPrint('📡 Flushing pending VoIP token after login');
+    await _syncVoipTokenToServer(token);
+  }
+
+  static Future<void> _syncVoipTokenToServer(String voipToken) async {
+    try {
+      final userId = await getUserId();
+      final apiKey = await getBusinessApiKey();
+      if (userId == 0 || apiKey.isEmpty) {
+        // Cache the token so it can be sent once the user logs in.
+        _pendingVoipToken = voipToken;
+        debugPrint('⚠️ VoIP token sync deferred — user not logged in yet');
+        return;
+      }
+      final fcmToken = (await FirebaseMessaging.instance.getToken()) ?? '';
+      final url = Uri.parse('${ApiEndPoints.baseUrl}${ApiEndPoints.authEndpoints.saveVoipToken}');
+      final response = await http.post(
+        url,
+        headers: {
+          'X-Client-GetGabs': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({
+          'user_id': userId,
+          'fcm_token': fcmToken,
+          'voip_token': voipToken,
+          'api_key': apiKey,
+        }),
+      );
+      debugPrint('📡 VoIP token sync: ${response.statusCode}');
+    } catch (e) {
+      debugPrint('❌ VoIP token sync error: $e');
+    }
+  }
+
+
+  // ============================================
   // CREDENTIALS HELPERS
   // ============================================
   static Future<String> getBusinessApiKey() async {

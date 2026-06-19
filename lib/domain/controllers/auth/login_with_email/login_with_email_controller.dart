@@ -13,6 +13,7 @@ import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:getgabs/routes/app_route.dart';
 import '../../../../main.dart';
 import '../../../services/remote_services/remote_auth_service.dart';
+import '../../../end_points/api_end_points.dart';
 
 class LoginWithEmailController extends GetxController
     with GetTickerProviderStateMixin {
@@ -260,6 +261,11 @@ class LoginWithEmailController extends GetxController
               // ✅ iOS: VoIP + FCM sync
               // ✅ Android: FCM only (voip skip hoga)
               syncDeviceTokensToServer(userId.toString(), extractedApiKey);
+              // Flush any VoIP token that arrived before login credentials
+              // were available (race condition at startup).
+              if (Platform.isIOS) {
+                WhatsAppCallingConfig.flushPendingVoipToken();
+              }
             }
             Get.offAllNamed(AppRoute.dashboard);
           });

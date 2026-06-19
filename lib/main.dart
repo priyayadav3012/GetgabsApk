@@ -9,10 +9,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
-import 'package:flutter_callkit_incoming/entities/ios_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
-import 'package:uuid/uuid.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
@@ -79,22 +77,18 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await prefs.setString(
         'pending_from_user_id', message.data['from_user_id'] ?? '');
 
-    // #changedWithJClaude — Bug 3 fix REVERTED: restore flutter_callkit_incoming on iOS.
-    // The original removal assumed VoIP push would reliably show native CallKit on its own,
-    // but VoIP push delivery is not guaranteed. FCM-triggered CallKit is the safety net.
-    // UUID alignment: AppDelegate writes pending_callkit_id = VoIP UUID when VoIP push
-    // fires (which arrives before FCM on iOS). We reuse that UUID here so both CXProviders
-    // refer to the same call. If native CallKit already showed, iOS rejects the duplicate
-    // silently and the native UI stays. If VoIP push hasn't fired yet, we generate a new
-    // UUID and the plugin CallKit shows — answer path via CallEventActionCallAccept works
-    // correctly with Bugs 1/2/4/5/6 fixes in place.
-    final String safeId;
+    // iOS: store the server-supplied uuid (same v5 UUID the VoIP push carries so
+    // AppDelegate and this handler agree on the same CallKit UUID).  Do NOT call
+    // FlutterCallkitIncoming.showCallkitIncoming() — native CallManager owns the
+    // CallKit UI on iOS (see C-2).
     if (Platform.isIOS) {
-      final voipUuid = prefs.getString('pending_callkit_id') ?? '';
-      safeId = voipUuid.isNotEmpty ? voipUuid : const Uuid().v4();
-    } else {
-      safeId = callId;
+      final serverUuid = message.data['uuid'] ?? callId;
+      await prefs.setString('pending_callkit_id', serverUuid);
+      return;
     }
+
+    // Android path: flutter_callkit_incoming owns the CallKit-equivalent UI.
+    final safeId = callId;
     await prefs.setString('pending_callkit_id', safeId);
 
     final displayForAvatar = callerName.isNotEmpty
@@ -124,28 +118,13 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         actionColor: '#034737',
         textColor: '#ffffff',
       ),
-      ios: const IOSParams(
-        iconName: 'AppIcon',
-        handleType: 'number',
-        supportsVideo: false,
-        supportsGrouping: false,
-        supportsHolding: false,
-        supportsUngrouping: false,
-        audioSessionMode: 'default',
-        maximumCallGroups: 1,
-        maximumCallsPerCallGroup: 1,
-        configureAudioSession: true,
-      ),
       missedCallNotification: const NotificationParams(
         showNotification: true,
         subtitle: 'Missed call',
       ),
     );
 
-    final active = await FlutterCallkitIncoming.activeCalls();
-    if (active.isEmpty) {
-      await FlutterCallkitIncoming.showCallkitIncoming(params);
-    }
+    await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
   if (type == 'call_terminated') {
@@ -261,7 +240,6 @@ Future<void> main() async {
 // INITIALIZE CALL LISTENER (delayed)
 // ============================================
 Future<void> _initializeCallListener() async {
-  await Future.delayed(const Duration(seconds: 2));
   await WhatsAppCallingConfig.initializeCallListener();
 }
 
@@ -391,7 +369,11 @@ class _MyAppState extends State<MyApp> {
       onReady: () {
         debugPrint('✅ App onReady');
         _initializeCallListener();
-        WhatsAppCallingConfig.handlePendingCallNavigation();
+        // Navigation is handled by _checkInitialCall (killed state) and by
+        // onNativeCallAnswered / CallEventActionCallAccept (foreground/background).
+        // Calling handlePendingCallNavigation here fires before _checkInitialCall
+        // has set _pendingNavigation, making it a no-op, and could fire on stale
+        // data if cleanupCall() missed clearing it.
       },
     );
   }
