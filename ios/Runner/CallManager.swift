@@ -34,10 +34,15 @@ import WebRTC
         super.init()
         self.provider.setDelegate(self, queue: nil)
 
-        // Configure WebRTC to use manual audio management and start disabled
+        // Configure WebRTC audio BEFORE any call so the configuration is already
+        // in place when CallKit activates the session. Calling setConfiguration
+        // inside didActivate changes the AVAudioSession category mid-handoff,
+        // which makes iOS treat our app as interrupting TelephonyUtilities —
+        // that interruption is rejected and audio never starts.
         let rtcAudioSession = RTCAudioSession.sharedInstance()
         rtcAudioSession.useManualAudio = true
         rtcAudioSession.isAudioEnabled = false
+        configureWebRTCAudio()
     }
 
     // MARK: - INCOMING CALL
@@ -149,10 +154,11 @@ import WebRTC
     // MARK: - AUDIO ACTIVATED
     public func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         print("🔊 Audio Session Activated by CallKit")
-        // Configure WebRTC audio session HERE — after CallKit has activated the session.
-        // Calling setConfiguration before activation (e.g. in the answer action) races
-        // with the system and can silently fail or produce distorted audio.
-        setupAudioSession()
+        // Only notify WebRTC that CallKit handed us the session — do NOT call
+        // setConfiguration here. Reconfiguring the AVAudioSession category/mode
+        // inside didActivate triggers an iOS-level "interruption" of
+        // TelephonyUtilities (the CallKit audio owner), which is rejected and
+        // silently kills the audio, causing the call to drop ~2 s after answering.
         let rtcSession = RTCAudioSession.sharedInstance()
         rtcSession.audioSessionDidActivate(audioSession)
         rtcSession.isAudioEnabled = true
@@ -166,24 +172,24 @@ import WebRTC
         rtcSession.isAudioEnabled = false
     }
 
-    // MARK: - AUDIO SETUP
-    private func setupAudioSession() {
+    // MARK: - AUDIO PRE-CONFIGURATION
+    // Called once at init so WebRTC's desired category/mode is staged before
+    // any call. This runs while no session is active, so iOS accepts the change
+    // without conflict.
+    private func configureWebRTCAudio() {
         let rtcAudioSession = RTCAudioSession.sharedInstance()
         rtcAudioSession.lockForConfiguration()
-        defer {
-            rtcAudioSession.unlockForConfiguration()
-        }
-        
+        defer { rtcAudioSession.unlockForConfiguration() }
+
         do {
             let configuration = RTCAudioSessionConfiguration.webRTC()
             configuration.category = AVAudioSession.Category.playAndRecord.rawValue
             configuration.mode = AVAudioSession.Mode.voiceChat.rawValue
             configuration.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
-            
             try rtcAudioSession.setConfiguration(configuration)
-            print("🔊 RTCAudioSession configured successfully")
+            print("🔊 RTCAudioSession pre-configured")
         } catch {
-            print("❌ RTCAudioSession configuration error: \(error)")
+            print("❌ RTCAudioSession pre-config error: \(error)")
         }
     }
 
