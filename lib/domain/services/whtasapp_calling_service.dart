@@ -810,9 +810,31 @@ class WhatsAppCallingService {
     _isCallActive = true;
     _callAccepted = true;
 
-    await _requestPermissions();
-    await _createPeerConnection();
+    debugPrint('📞 answerCall: callId=$safeCallId sdpLength=${safeSdp.length}');
 
+    // Ensure socket is connected before WebRTC handshake — mirrors the wait
+    // loop in makeCall(). Without this, ICE candidates are dropped when the
+    // socket is still reconnecting after a background→foreground transition.
+    if (socket == null || !socket!.connected) {
+      debugPrint('⏳ answerCall: waiting for socket...');
+      if (socket != null && !socket!.connected) socket!.connect();
+      int attempts = 0;
+      while ((socket == null || !socket!.connected) && attempts < 40) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        attempts++;
+        if (attempts % 10 == 0) socket?.connect();
+      }
+      debugPrint(socket?.connected == true
+          ? '✅ answerCall: socket ready'
+          : '⚠️ answerCall: socket still not connected, proceeding anyway');
+    }
+
+    await _requestPermissions();
+    debugPrint('📞 answerCall: creating peer connection...');
+    await _createPeerConnection();
+    debugPrint('📞 answerCall: peer connection created');
+
+    debugPrint('📞 answerCall: getting user media...');
     localStream = await webrtc.navigator.mediaDevices.getUserMedia({
       'audio': {
         'echoCancellation': true,
@@ -821,15 +843,19 @@ class WhatsAppCallingService {
       },
       'video': false,
     }).timeout(const Duration(seconds: 10));
+    debugPrint('📞 answerCall: got user media, tracks=${localStream!.getTracks().length}');
 
     for (var track in localStream!.getTracks()) {
       peerConnection!.addTrack(track, localStream!);
     }
 
+    debugPrint('📞 answerCall: setting remote description...');
     await peerConnection!
         .setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
+    debugPrint('📞 answerCall: creating answer...');
     RTCSessionDescription answer = await peerConnection!.createAnswer();
     await peerConnection!.setLocalDescription(answer);
+    debugPrint('📞 answerCall: SDP answer created, posting to server...');
 
     final response = await http
         .post(
@@ -840,9 +866,12 @@ class WhatsAppCallingService {
             'sdpAnswer': answer.sdp,
             'api_key': businessApiKey,
             'acceptedBy': userId,
+            'adminId': adminId,
           }),
         )
         .timeout(const Duration(seconds: 15));
+
+    debugPrint('📞 answerCall: server response ${response.statusCode}: ${response.body}');
 
     if (response.statusCode != 200) {
       throw Exception('Failed to answer: ${response.statusCode}');
@@ -1358,7 +1387,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
         return;
       }
       await widget.callingService.answerCall();
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('❌ _answerCall error: $e');
+      debugPrint('❌ _answerCall stack: $stack');
       _handleCallEnded('Failed to connect');
     }
   }
@@ -1756,8 +1787,16 @@ class GlobalCallListenerService {
     await _service!.initialize();
 
     // ============================================
-    // CALLKIT EVENT LISTENER
+    // CALLKIT EVENT LISTENER — iOS only
+    // Android uses setupCallKitEvents() in main() which is a static listener
+    // that handles the full CallKit → WhatsAppCallingScreen flow. Setting up
+    // a second listener here on Android causes double-navigation on accept.
     // ============================================
+    if (!Platform.isIOS) {
+      _isInitialized = true;
+      debugPrint('✅ GlobalCallListenerService initialized (Android — CallKit handled by setupCallKitEvents)');
+      return;
+    }
     _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
       debugPrint('📞 CallKit EVENT: $event');
 

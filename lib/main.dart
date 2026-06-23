@@ -37,7 +37,22 @@ bool _isCallScreenOpen = false;
 class AppLifecycleObserver extends WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    isAppInForeground = state == AppLifecycleState.resumed;
+    if (Platform.isIOS) {
+      // On iOS, `inactive` is a transient state fired during CallKit overlay
+      // dismissal. Treating it as background causes the foreground call-accept
+      // path to fall into the background path and defer WebRTC unnecessarily.
+      // Only update on resumed / paused / detached — ignore inactive.
+      if (state == AppLifecycleState.resumed) {
+        isAppInForeground = true;
+      } else if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.detached) {
+        isAppInForeground = false;
+      }
+      // AppLifecycleState.inactive intentionally ignored on iOS.
+    } else {
+      // Android: keep the original simple mapping.
+      isAppInForeground = state == AppLifecycleState.resumed;
+    }
     debugPrint(isAppInForeground ? '🟢 FOREGROUND' : '🔴 BACKGROUND');
 
     if (state == AppLifecycleState.resumed) {
@@ -183,24 +198,6 @@ Future<void> _clearCallPrefs(SharedPreferences prefs) async {
   debugPrint('🧹 Call preferences cleared');
 }
 
-// ============================================
-// GLOBAL CALL LISTENER INIT
-// ============================================
-Future<void> _initGlobalCalling() async {
-  final prefs = await SharedPreferences.getInstance();
-
-  final userId = prefs.getInt('user_id') ?? 0;
-  final adminId = prefs.getInt('admin_id') ?? 0;
-  final apiKey = prefs.getString('business_api_key') ?? '';
-
-  if (userId == 0 || apiKey.isEmpty) return;
-
-  await GlobalCallListenerService.instance.initialize(
-    userId: userId,
-    adminId: adminId,
-    businessApiKey: apiKey,
-  );
-}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -230,7 +227,7 @@ Future<void> main() async {
   // ✅ Android file mein tha — CallKit events setup
   WhatsAppCallingConfig.setupCallKitEvents();
 
-  await _initGlobalCalling();
+  await WhatsAppCallingConfig.initializeCallListener();
   WhatsAppCallingConfig.initMethodChannel();
 
   runApp(const MyApp());

@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
@@ -312,7 +313,7 @@ class WhatsAppCallingConfig {
   static Future<void> _syncVoipTokenToServer(String voipToken) async {
     try {
       final userId = await getUserId();
-      final apiKey = await getBusinessApiKey();
+      final apiKey = await _userData.getApiKey(); // personal key for app.getgabs.com
       if (userId == 0 || apiKey.isEmpty) {
         // Cache the token so it can be sent once the user logs in.
         _pendingVoipToken = voipToken;
@@ -321,6 +322,7 @@ class WhatsAppCallingConfig {
       }
       final fcmToken = (await FirebaseMessaging.instance.getToken()) ?? '';
       final url = Uri.parse('${ApiEndPoints.baseUrl}${ApiEndPoints.authEndpoints.saveVoipToken}');
+      debugPrint('📡 VoIP token sync → userId=$userId apiKey=${apiKey.substring(0, 8)}... voipToken=${voipToken.substring(0, 8)}...');
       final response = await http.post(
         url,
         headers: {
@@ -335,7 +337,7 @@ class WhatsAppCallingConfig {
           'api_key': apiKey,
         }),
       );
-      debugPrint('📡 VoIP token sync: ${response.statusCode}');
+      debugPrint('📡 VoIP token sync: ${response.statusCode} — ${response.body}');
     } catch (e) {
       debugPrint('❌ VoIP token sync error: $e');
     }
@@ -347,8 +349,19 @@ class WhatsAppCallingConfig {
   // ============================================
   static Future<String> getBusinessApiKey() async {
     try {
-      final apiKey = await _userData.getApiKey();
-      return apiKey.isEmpty ? businessApiKeyFallback : apiKey;
+      final box = GetStorage();
+      await box.initStorage;
+      final storedDataJson = box.read('responseData');
+      if (storedDataJson != null) {
+        final Map<String, dynamic> storedData = json.decode(storedDataJson);
+        final fbKey = storedData['facebook_details']?[0]?['api_key'];
+        if (fbKey != null && fbKey.toString().isNotEmpty) return fbKey.toString();
+        if (storedData['getadmininfo'] != null) {
+          final adminFbKey = storedData['getadmininfo']['facebook_details']?[0]?['api_key'];
+          if (adminFbKey != null && adminFbKey.toString().isNotEmpty) return adminFbKey.toString();
+        }
+      }
+      return businessApiKeyFallback;
     } catch (e) {
       return businessApiKeyFallback;
     }
@@ -477,8 +490,6 @@ class WhatsAppCallingConfig {
           service.isOutgoingCall = false;
           debugPrint('✅ setPendingCall done');
         }
-
-        await _clearCallPrefs(prefs);
 
         if (Get.context != null) {
           debugPrint('🚀 Navigating directly');

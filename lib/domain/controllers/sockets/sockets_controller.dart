@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -29,15 +30,20 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> _initializeSocket() async {
+    String platform = Platform.isIOS ? "ios" : "android";
     var role = await userData.getUserRole();
     var userId = await userData.getLoggedInUserId();
     var userPrivilage = await userData.getUserPrivilage();
     var adminId =
         role == "user" ? await userData.getParentUserId() : userId.toString();
-    // var adminId = await userData.getParentUserId();
-    // print(userPrivilage);
-    // print(adminId);
-    initializeSocket(role, userId.toString(), userPrivilage, adminId);
+    var apiKey = await userData.getApiKey();
+
+    if (apiKey.isEmpty) {
+      debugPrint('❌ Socket initialization aborted: API key is undefined or empty');
+      return;
+    }
+
+    initializeSocket(platform, role, userId.toString(), userPrivilage, adminId, apiKey);
   }
 
   bool isOnMessagesPage(String incomingWaKey) {
@@ -54,12 +60,15 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
     return false;
   }
 
-  void initializeSocket(
-      String userRole, String userId, int userPrivilage, var adminId) {
+  void initializeSocket(String Platform,
+      String userRole, String userId, int userPrivilage, var adminId, String apiKey) {
     _socket = IO.io(
         'https://app.getgabs.com:56000',
         IO.OptionBuilder()
-            .setTransports(['websocket'])
+            .setTransports(['websocket', 'polling'])
+            .setAuth({
+            'api_key': apiKey
+      })
             .enableForceNew()
             .build());
 
@@ -67,6 +76,7 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
       print('Connected to socket');
       print(data);
       var userinfo = {
+        'platform': Platform, // new parameter
         'role': userRole,
         'id': userId,
         'user_privilage': userPrivilage,
