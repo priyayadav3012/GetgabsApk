@@ -229,6 +229,10 @@ class WhatsAppCallingConfig {
         await FlutterCallkitIncoming.endAllCalls();
         final svc2 = GlobalCallListenerService.instance.service;
         await svc2?.cleanupCall();
+        // Notify the active call screen so it navigates back.
+        // Without this, the UI stays open forever when the user ends
+        // the call from the native CallKit screen (lock screen).
+        svc2?.onCallEnded?.call();
         break;
 
       default:

@@ -2,12 +2,14 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
+import 'package:getgabs/main.dart' show isAppInForeground;
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -67,7 +69,16 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark,
     ));
-    _initCall();
+    // iOS: defer until after the first frame so CallKit's provider:didActivate:
+    // has time to set RTCAudioSession.isAudioEnabled = true before getUserMedia()
+    // is called. Without this, audio never starts and the call drops immediately.
+    if (Platform.isIOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (isAppInForeground) await _initCall();
+      });
+    } else {
+      _initCall();
+    }
   }
 
   Future<void> _initCall() async {

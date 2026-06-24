@@ -240,17 +240,13 @@ import FirebaseMessaging
         if let userInfo = notification.userInfo,
            let uuidStr = userInfo["uuid"] as? String {
             let cleanUuid = uuidStr.lowercased()
-            print("📲 Native Call Answered Linker Hooked for UUID: \(cleanUuid)")
-            
-            if let channel = callChannel {
-                // If Flutter engine is completely initialized, invoke channel event
-                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": cleanUuid])
-                print("✅ Flutter notified via channel event: onNativeCallAnswered")
-            } else {
-                // 🔥 CRITICAL CACHE: If app is killed/locked, Flutter channel is nil. Save it!
-                print("⏳ Flutter not ready yet. Caching answered call event for UUID: \(cleanUuid)")
-                self.pendingAnsweredCallUUID = cleanUuid
-            }
+            // ALWAYS cache — never invoke the channel directly here.
+            // tryNotifyFlutter (already running concurrently) is the live-invocation
+            // path and clears this cache when it succeeds, preventing double-fire.
+            // checkPendingAnsweredCall() is the killed-state fallback if all retries
+            // exhaust before Dart starts.
+            print("📲 Native Call Answered — UUID cached for recovery: \(cleanUuid)")
+            self.pendingAnsweredCallUUID = cleanUuid
         }
     }
 }

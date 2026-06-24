@@ -95,25 +95,26 @@ class WhatsAppCallingService {
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
       {'urls': 'stun:stun2.l.google.com:19302'},
+      {'urls': 'stun:stun.relay.metered.ca:80'},
       {
         'urls': 'turn:global.relay.metered.ca:80',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turn:global.relay.metered.ca:80?transport=tcp',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turn:global.relay.metered.ca:443',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turns:global.relay.metered.ca:443?transport=tcp',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
     ],
     'iceCandidatePoolSize': 10,
@@ -218,7 +219,8 @@ class WhatsAppCallingService {
     socket = IO.io(
       socketUrl,
       IO.OptionBuilder()
-          .setTransports(['polling'])
+          .setTransports([
+            'polling'])
           .setAuth({'userId': userId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
@@ -542,7 +544,7 @@ class WhatsAppCallingService {
         ios: const IOSParams(
           handleType: 'number',
           supportsVideo: false,
-          audioSessionMode: 'default',
+          audioSessionMode: 'VideoChat',
           supportsGrouping: false, // ✅ iOS Code 4 prevent karta hai
           supportsUngrouping: false,
           maximumCallGroups: 1,
@@ -757,6 +759,21 @@ class WhatsAppCallingService {
     // In background→foreground transitions the socket reconnects after setLocalDescription
     // already triggers candidate generation, so we queue and flush on onConnect.
     peerConnection!.onIceCandidate = (candidate) {
+      // Diagnose STUN/TURN: log candidate type so failures are visible in console.
+      // host   = local network candidate (always present, no STUN/TURN needed)
+      // srflx  = STUN worked (public IP discovered)
+      // relay  = TURN worked (media will route through relay server)
+      // If you only ever see 'host' and call fails → STUN/TURN is broken.
+      final raw = candidate.candidate ?? '';
+      final type = raw.contains('typ relay')
+          ? '🔁 relay (TURN)'
+          : raw.contains('typ srflx')
+              ? '🌐 srflx (STUN)'
+              : raw.contains('typ host')
+                  ? '🏠 host'
+                  : '❓ unknown';
+      debugPrint('🧊 ICE candidate: $type | ${raw.split(' ').take(6).join(' ')}');
+
       if (currentCallId == null) return;
       final payload = {
         'callId': currentCallId,

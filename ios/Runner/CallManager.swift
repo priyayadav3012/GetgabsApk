@@ -104,16 +104,16 @@ import WebRTC
         tryNotifyFlutter(uuid: uuid, attempt: 0)
     }
 
-    // #changedWithJClaude — Bug 1: new helper; retries every 0.5 s up to 20× then caches UUID.
+    // Retries every 0.5 s up to 20×.
+    // handleNativeCallAnswered always caches the UUID in pendingAnsweredCallUUID.
+    // When we successfully invoke Flutter we clear the cache so checkPendingAnsweredCall
+    // skips it (preventing double-fire). If checkPendingAnsweredCall fires first (killed
+    // state), it clears the cache and we detect nil here and stop retrying.
     private func tryNotifyFlutter(uuid: String, attempt: Int) {
         guard attempt < 20 else {
-            // Flutter never became ready — cache so checkPendingAnsweredCall() retrieves it
-            DispatchQueue.main.async {
-                if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
-                    print("⏳ Flutter not ready after 10s — caching UUID: \(uuid)")
-                    appDelegate.pendingAnsweredCallUUID = uuid
-                }
-            }
+            // All retries exhausted — pendingAnsweredCallUUID is still set so
+            // checkPendingAnsweredCall() will pick it up on next Dart-side poll.
+            print("⏳ All retries exhausted — checkPendingAnsweredCall will handle UUID: \(uuid)")
             return
         }
 
@@ -122,7 +122,14 @@ import WebRTC
                 self.tryNotifyFlutter(uuid: uuid, attempt: attempt + 1)
                 return
             }
+            // If cache is nil, checkPendingAnsweredCall already handled this call — stop.
+            guard appDelegate.pendingAnsweredCallUUID != nil else {
+                print("✅ UUID already handled by checkPendingAnsweredCall (attempt \(attempt + 1)) — stopping")
+                return
+            }
             if let channel = appDelegate.callChannel {
+                // Claim the UUID before invoking to race-safely prevent checkPendingAnsweredCall
+                appDelegate.pendingAnsweredCallUUID = nil
                 channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": uuid])
                 print("✅ Flutter notified: onNativeCallAnswered (attempt \(attempt + 1))")
             } else {
