@@ -24,6 +24,21 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import 'package:vibration/vibration.dart';
 
+final _uuidFactory = Uuid();
+
+String normalizeCallKitId(String? id) {
+  if (id == null || id.trim().isEmpty) return _uuidFactory.v4();
+
+  final normalized = id.trim().toLowerCase();
+  final uuidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  if (uuidRegex.hasMatch(normalized)) return normalized;
+
+  return _uuidFactory.v5(Uuid.NAMESPACE_URL, normalized).toLowerCase();
+}
+
 class WhatsAppCallingService {
   final int userId;
   final int adminId;
@@ -72,8 +87,6 @@ class WhatsAppCallingService {
   String? currentPhoneNumber;
   String? currentCallerName;
   bool isOutgoingCall = false;
-
-  final _uuid = Uuid();
 
   Timer? _callTimeoutTimer;
   static const int callTimeoutSeconds = 60;
@@ -169,16 +182,7 @@ class WhatsAppCallingService {
   // HELPER — iOS ke liye valid UUID banana
   // ============================================
   String _getValidCallKitId(String? id) {
-    if (id == null || id.isEmpty) return _uuid.v4();
-
-    final uuidRegex = RegExp(
-      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-    );
-
-    if (uuidRegex.hasMatch(id)) return id;
-
-    // iOS ke liye string ko stable UUID mein convert karo
-    return _uuid.v5(Uuid.NAMESPACE_URL, id);
+    return normalizeCallKitId(id);
   }
 
   String _formatPhoneNumber(String phone) {
@@ -219,8 +223,7 @@ class WhatsAppCallingService {
     socket = IO.io(
       socketUrl,
       IO.OptionBuilder()
-          .setTransports([
-            'polling'])
+          .setTransports(['polling'])
           .setAuth({'userId': userId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
@@ -568,7 +571,7 @@ class WhatsAppCallingService {
     if (_isRinging) return;
     _isRinging = true;
     try {
-      if (await Vibration.hasVibrator() ?? false) {
+      if (await Vibration.hasVibrator() == true) {
         Vibration.vibrate(pattern: [0, 1000, 500, 1000, 500, 1000], repeat: 2);
       }
       _ringtonePlayer = AudioPlayer();
@@ -772,7 +775,8 @@ class WhatsAppCallingService {
               : raw.contains('typ host')
                   ? '🏠 host'
                   : '❓ unknown';
-      debugPrint('🧊 ICE candidate: $type | ${raw.split(' ').take(6).join(' ')}');
+      debugPrint(
+          '🧊 ICE candidate: $type | ${raw.split(' ').take(6).join(' ')}');
 
       if (currentCallId == null) return;
       final payload = {

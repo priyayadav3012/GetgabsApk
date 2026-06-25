@@ -21,7 +21,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'domain/services/whtasapp_calling_service.dart';
 
-
 final RouteObserver<ModalRoute<void>> routeObserver =
     RouteObserver<ModalRoute<void>>();
 
@@ -83,12 +82,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // CallKit UI on iOS (see C-2).
     if (Platform.isIOS) {
       final serverUuid = message.data['uuid'] ?? callId;
-      await prefs.setString('pending_callkit_id', serverUuid);
+      await prefs.setString(
+        'pending_callkit_id',
+        normalizeCallKitId(serverUuid),
+      );
       return;
     }
 
     // Android path: flutter_callkit_incoming owns the CallKit-equivalent UI.
-    final safeId = callId;
+    final safeId = normalizeCallKitId(callId);
     await prefs.setString('pending_callkit_id', safeId);
 
     final displayForAvatar = callerName.isNotEmpty
@@ -140,7 +142,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   if (type == 'new_message' || message.notification != null) {
     debugPrint("📩 Background message received!");
-    
+
     // Yahan aapko ek flag set karna hai ki "Naya message aaya hai, list refresh karo"
     await prefs.setBool('has_new_messages_to_refresh', true);
   }
@@ -322,9 +324,11 @@ class _MyAppState extends State<MyApp> {
       service.currentPhoneNumber = callerNumber;
       service.currentCallerName = callerName;
       service.isOutgoingCall = false;
-      debugPrint('✅ setPendingCall done in _checkInitialCall (hasActivePendingCall=${service.hasActivePendingCall})');
+      debugPrint(
+          '✅ setPendingCall done in _checkInitialCall (hasActivePendingCall=${service.hasActivePendingCall})');
     } else {
-      debugPrint('⚠️ service still null after initializeCallListener — will rely on prefs recovery in _initCall');
+      debugPrint(
+          '⚠️ service still null after initializeCallListener — will rely on prefs recovery in _initCall');
     }
 
     // ✅ Pending navigation set karo

@@ -6,6 +6,39 @@ import UserNotifications
 import CallKit
 import AVFoundation
 import FirebaseMessaging
+import CryptoKit
+
+private let callkitNamespaceUUID = UUID(uuidString: "6ba7b811-9dad-11d1-80b4-00c04fd430c8")!
+
+private func normalizeCallKitUUID(_ raw: String?) -> String {
+    guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+        return UUID().uuidString.lowercased()
+    }
+
+    let trimmed = raw.lowercased()
+    if let validUUID = UUID(uuidString: trimmed) {
+        return validUUID.uuidString.lowercased()
+    }
+
+    let namespaceBytes = withUnsafeBytes(of: callkitNamespaceUUID.uuid) { Array($0) }
+    var data = Data()
+    data.append(contentsOf: namespaceBytes)
+    data.append(contentsOf: trimmed.utf8)
+
+    let digest = Insecure.SHA1.hash(data: data)
+    var bytes = Array(digest)
+    bytes[6] &= 0x0f
+    bytes[6] |= 0x50
+    bytes[8] &= 0x3f
+    bytes[8] |= 0x80
+
+    let uuidTuple = (
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+
+    return UUID(uuid: uuidTuple).uuidString.lowercased()
+}
 
 @UIApplicationMain
 @objc class AppDelegate: FlutterAppDelegate, PKPushRegistryDelegate {
@@ -161,10 +194,10 @@ import FirebaseMessaging
         // Flutter's _getValidCallKitId).  Fall back to UUID().uuidString only when the
         // field is absent (older server versions), ensuring both push paths always share
         // the same UUID for a given call.
-        let rawUuidString = (data["uuid"] as? String)?.lowercased()
-            ?? (data["call_id"] as? String)?.lowercased()
+        let rawUuidString = (data["uuid"] as? String)
+            ?? (data["call_id"] as? String)
             ?? UUID().uuidString
-        let uuidString = rawUuidString.lowercased()
+        let uuidString = normalizeCallKitUUID(rawUuidString)
 
         // Support both camelCase and snake_case field names from server
         let callerName = (data["callerName"] as? String)
