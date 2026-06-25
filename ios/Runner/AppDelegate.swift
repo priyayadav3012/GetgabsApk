@@ -233,6 +233,16 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
             return
         }
 
+        // Guard against a second VoIP push arriving while a call is already active.
+        // currentCallUUID is set here and cleared only when CALL_ENDED_NATIVE fires.
+        // A different UUID means the server sent a second push — ignore it entirely
+        // so the in-progress call is not interrupted.
+        if let existingUUID = self.currentCallUUID, existingUUID != uuidString {
+            print("⚠️ VoIP push for \(uuidString) ignored — call \(existingUUID) already active")
+            completion()
+            return
+        }
+
         self.currentCallUUID = uuidString
         print("📞 Processing Incoming Call From: \(callerName) with UUID: \(uuidString)")
 

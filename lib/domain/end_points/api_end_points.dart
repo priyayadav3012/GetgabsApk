@@ -351,17 +351,20 @@ class WhatsAppCallingConfig {
   // ============================================
   static Future<String> getBusinessApiKey() async {
     try {
-      final apiKey = await _userData.getApiKey();
-      return apiKey.isEmpty ? businessApiKeyFallback : apiKey;
+      final apiKey = await _userData.getWhatsAppBusinessApiKey();
+      if (apiKey.isNotEmpty) return apiKey;
+      debugPrint('⚠️ getBusinessApiKey: WhatsApp Business API key not found in storage');
+      return '';
     } catch (e) {
-      return businessApiKeyFallback;
+      debugPrint('❌ getBusinessApiKey error: $e');
+      return '';
     }
   }
 
   static Future<int> getUserId() async {
     try {
       final userId = await _userData.getLoggedInUserId();
-      return (userId == null || userId == 0) ? 0 : userId;
+      return userId == 0 ? 0 : userId;
     } catch (e) {
       return 0;
     }
@@ -370,7 +373,7 @@ class WhatsAppCallingConfig {
   static Future<int> getAdminId() async {
     try {
       final adminIdStr = await _userData.getParentUserId();
-      if (adminIdStr == null || adminIdStr.trim().isEmpty) return await getUserId();
+      if (adminIdStr.trim().isEmpty) return await getUserId();
       final adminId = int.tryParse(adminIdStr);
       return (adminId == null || adminId == 0) ? await getUserId() : adminId;
     } catch (e) {
@@ -634,6 +637,14 @@ class WhatsAppCallingConfig {
       if (Get.isDialogOpen ?? false) Get.back();
       if (userId == 0) {
         _showError('User credentials not found');
+        return;
+      }
+      if (apiKey.isEmpty) {
+        _showError('WhatsApp Business API key not configured. Please contact your admin.');
+        return;
+      }
+      if (adminId == 0) {
+        _showError('Admin account not found. Please re-login.');
         return;
       }
 

@@ -305,6 +305,7 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   void _endCall() {
     HapticFeedback.mediumImpact();
     _callingService?.terminateCall();
+    _handleCallEnded('Call ended');
   }
 
   String _getInitials(String name, String number) {
