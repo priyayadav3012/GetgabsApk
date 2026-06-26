@@ -7,6 +7,7 @@ import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -736,6 +737,18 @@ class WhatsAppCallingService {
     _callAccepted = false;
     _bufferedIceCandidates.clear(); // #changedWithJClaude
 
+    // Tell native AppDelegate the call has ended so the isCallActive guard is
+    // lifted and the next incoming VoIP push is handled normally.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallEnded');
+        debugPrint('✅ Native notified: markCallEnded');
+      } catch (e) {
+        debugPrint('⚠️ markCallEnded channel error: $e');
+      }
+    }
+
     _updateStatus('Ready');
   }
 
@@ -839,6 +852,20 @@ class WhatsAppCallingService {
     currentCallId = safeCallId;
     _isCallActive = true;
     _callAccepted = true;
+
+    // Tell native AppDelegate that a call is now active so any delayed VoIP
+    // retry push is blocked from creating a second CallKit incoming-call UI.
+    // This is critical for socket-originated calls where AppDelegate never ran
+    // pushRegistry and its isCallActive flag is still false.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallAccepted');
+        debugPrint('✅ Native notified: markCallAccepted');
+      } catch (e) {
+        debugPrint('⚠️ markCallAccepted channel error: $e');
+      }
+    }
 
     await _requestPermissions();
     await _createPeerConnection();

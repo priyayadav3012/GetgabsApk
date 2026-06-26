@@ -86,6 +86,13 @@ class WhatsAppCallingConfig {
     debugPrint('📦 _pendingNavigation stored: ${nav['callerName']}');
   }
 
+  // Returns true if any call is already active or accepted on the Dart side.
+  // Used to guard against late/duplicate VoIP push events.
+  static bool _isAnyCallActiveOrAccepted() {
+    final svc = GlobalCallListenerService.instance.service;
+    return svc != null && (svc.isCallActive || svc.callAccepted);
+  }
+
   // ============================================
   // iOS — Native MethodChannel init
   // Android pe yeh call mat karo (Platform check se handle hoga)
@@ -129,6 +136,16 @@ class WhatsAppCallingConfig {
         final callerName = args?['callerName'] as String? ?? 'Unknown';
         final uuid = args?['uuid'] as String? ?? '';
         debugPrint('📞 Incoming VoIP: $callerName');
+
+        // Backup guard: if the Dart-side service already accepted a call (socket
+        // or native path), this push is a late retry — ignore it entirely.
+        // The primary guard is isCallActive in AppDelegate (native), but this
+        // catches any edge cases where the push slips through before native is updated.
+        if (_isAnyCallActiveOrAccepted()) {
+          debugPrint(
+              '⚠️ onIncomingVoipCall ignored — call already active/accepted');
+          break;
+        }
 
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
@@ -226,13 +243,20 @@ class WhatsAppCallingConfig {
 
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
-        await FlutterCallkitIncoming.endAllCalls();
-        final svc2 = GlobalCallListenerService.instance.service;
-        await svc2?.cleanupCall();
+        // terminateCall() must run BEFORE endAllCalls() so that currentCallId
+        // is still set when the HTTP /terminate-whatsapp-call goes out.
+        // Calling endAllCalls() first fires CallEventActionCallEnded on the
+        // stream → that calls terminateCall() asynchronously → but by then
+        // cleanupCall() has already nulled currentCallId → backendCallId = null
+        // → server never receives the terminate signal → other party stays on.
+        final svcEnd = GlobalCallListenerService.instance.service;
+        await svcEnd?.terminateCall();
+        // Safety net: if service is absent, at least dismiss the flutter CallKit UI.
+        if (svcEnd == null) await FlutterCallkitIncoming.endAllCalls();
         // Notify the active call screen so it navigates back.
         // Without this, the UI stays open forever when the user ends
         // the call from the native CallKit screen (lock screen).
-        svc2?.onCallEnded?.call();
+        svcEnd?.onCallEnded?.call();
         break;
 
       default:

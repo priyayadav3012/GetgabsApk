@@ -46,7 +46,12 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
     var voipRegistry: PKPushRegistry?
     var callChannel: FlutterMethodChannel?
     var currentCallUUID: String?
-    
+
+    // Set to true when ANY call is accepted (socket path OR native path).
+    // Used to block retry VoIP pushes from creating a second CallKit incoming-call UI.
+    // Cleared only when the call fully ends (CALL_ENDED_NATIVE or markCallEnded).
+    var isCallActive: Bool = false
+
     // Caching Variables
     var cachedVoipTokenString: String?
     var pendingAnsweredCallUUID: String? // 🔥 Stores UUID if Flutter is not yet active
@@ -101,6 +106,20 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
                 } else {
                     result(nil) // No pending calls found
                 }
+            }
+            // Called by Flutter when a socket-originated call is accepted so we
+            // can block any delayed VoIP push from showing a second CallKit UI.
+            else if call.method == "markCallAccepted" {
+                print("✅ markCallAccepted — isCallActive set to true")
+                self?.isCallActive = true
+                result(nil)
+            }
+            // Called by Flutter when a call fully ends (cleanupCall) so the next
+            // incoming push is allowed through again.
+            else if call.method == "markCallEnded" {
+                print("🧹 markCallEnded — isCallActive set to false")
+                self?.isCallActive = false
+                result(nil)
             }
             else {
                 result(FlutterMethodNotImplemented)
@@ -233,10 +252,20 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
             return
         }
 
-        // Guard against a second VoIP push arriving while a call is already active.
-        // currentCallUUID is set here and cleared only when CALL_ENDED_NATIVE fires.
-        // A different UUID means the server sent a second push — ignore it entirely
-        // so the in-progress call is not interrupted.
+        // Primary guard: if a call is already active (accepted via socket OR native),
+        // block all retry/delayed VoIP pushes regardless of UUID.
+        // isCallActive is set by markCallAccepted (Flutter socket path) and by
+        // CALL_ANSWERED_NATIVE (native CallKit path), cleared by markCallEnded /
+        // CALL_ENDED_NATIVE.  This is the only reliable cross-path guard.
+        if self.isCallActive {
+            print("⚠️ VoIP push for \(uuidString) ignored — isCallActive=true (call already answered)")
+            completion()
+            return
+        }
+
+        // Secondary guard: same-session, different-UUID push while we are still
+        // ringing (call not yet answered).  currentCallUUID is set here and cleared
+        // only when CALL_ENDED_NATIVE fires.
         if let existingUUID = self.currentCallUUID, existingUUID != uuidString {
             print("⚠️ VoIP push for \(uuidString) ignored — call \(existingUUID) already active")
             completion()
@@ -273,7 +302,7 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
             if self.currentCallUUID == uuidStr.lowercased() {
                 self.currentCallUUID = nil
             }
-            
+            self.isCallActive = false
             callChannel?.invokeMethod("onCallEndedNatively", arguments: ["uuid": uuidStr.lowercased()])
         }
     }
@@ -283,6 +312,8 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
         if let userInfo = notification.userInfo,
            let uuidStr = userInfo["uuid"] as? String {
             let cleanUuid = uuidStr.lowercased()
+            // Mark the call active so any delayed VoIP retry push is blocked.
+            self.isCallActive = true
             // ALWAYS cache — never invoke the channel directly here.
             // tryNotifyFlutter (already running concurrently) is the live-invocation
             // path and clears this cache when it succeeds, preventing double-fire.
