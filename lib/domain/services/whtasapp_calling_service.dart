@@ -660,38 +660,42 @@ class WhatsAppCallingService {
     _isCleaningUp = true;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final callkitId =
-          currentCallKitId ?? prefs.getString('pending_callkit_id');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final callkitId =
+            currentCallKitId ?? prefs.getString('pending_callkit_id');
 
-      if (callkitId != null && callkitId.isNotEmpty) {
-        debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
-        await FlutterCallkitIncoming.endCall(callkitId);
+        if (callkitId != null && callkitId.isNotEmpty) {
+          debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
+          await FlutterCallkitIncoming.endCall(callkitId);
+        }
+
+        await FlutterCallkitIncoming.endAllCalls();
+
+        await prefs.remove('pending_call_id');
+        await prefs.remove('pending_call_session');
+        await prefs.remove('pending_caller_name');
+        await prefs.remove('pending_caller_number');
+        await prefs.remove('pending_callkit_id');
+        await prefs.remove('pending_from_user_id');
+
+        debugPrint('🧹 Pending call prefs cleared');
+      } catch (e) {
+        debugPrint('❌ CallKit cleanup error: $e');
       }
 
-      await FlutterCallkitIncoming.endAllCalls();
-
-      await prefs.remove('pending_call_id');
-      await prefs.remove('pending_call_session');
-      await prefs.remove('pending_caller_name');
-      await prefs.remove('pending_caller_number');
-      await prefs.remove('pending_callkit_id');
-      await prefs.remove('pending_from_user_id');
-
-      debugPrint('🧹 Pending call prefs cleared');
-    } catch (e) {
-      debugPrint('❌ CallKit cleanup error: $e');
+      await stopRingtone();
+      _callKitShowing = false;
+      _callAccepted = false;
+      _cancelCallTimeout();
+      _clearPendingState();
+      await _logCallEnd();
+      final callEndedCallback = onCallEnded;
+      await cleanupCall(); // nulls onCallEnded and other callbacks
+      callEndedCallback?.call();
+    } finally {
+      _isCleaningUp = false;
     }
-
-    await stopRingtone();
-    _callKitShowing = false;
-    _callAccepted = false;
-    _cancelCallTimeout();
-    _clearPendingState();
-    await _logCallEnd();
-    await cleanupCall();
-    onCallEnded?.call();
-    _isCleaningUp = false;
   }
 
   Future<void> cleanupCall() async {
@@ -734,8 +738,14 @@ class WhatsAppCallingService {
     callStartTime = null;
     currentPhoneNumber = null;
     currentCallerName = null;
+    isOutgoingCall = false;
     _callAccepted = false;
     _bufferedIceCandidates.clear(); // #changedWithJClaude
+    onStatusChange = null;
+    onRemoteStream = null;
+    onCallEnded = null;
+    onError = null;
+    onIncomingCall = null;
 
     // Tell native AppDelegate the call has ended so the isCallActive guard is
     // lifted and the next incoming VoIP push is handled normally.
