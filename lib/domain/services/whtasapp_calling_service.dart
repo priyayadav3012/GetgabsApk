@@ -7,6 +7,7 @@ import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -241,9 +242,14 @@ class WhatsAppCallingService {
       developer.log('📞 ========== INCOMING CALL ==========');
       developer.log('📞 Data: $data');
 
-      if (_callAccepted) {
+      // On iOS: also block if _hasActivePendingCall is true.
+      // This catches the race window where the socket reconnects and the server
+      // replays whatsapp_call_incoming BEFORE answerCall() has set _callAccepted = true.
+      // On Android: socket whatsapp_call_incoming IS the primary call trigger,
+      // so only _callAccepted blocks — _hasActivePendingCall must not block it.
+      if (_callAccepted || (Platform.isIOS && _hasActivePendingCall)) {
         debugPrint(
-            '⚠️ Call already accepted — ignoring duplicate socket event');
+            '⚠️ Call already accepted/pending — ignoring duplicate socket event');
         return;
       }
 
@@ -731,6 +737,18 @@ class WhatsAppCallingService {
     _callAccepted = false;
     _bufferedIceCandidates.clear(); // #changedWithJClaude
 
+    // Tell native AppDelegate the call has ended so the isCallActive guard is
+    // lifted and the next incoming VoIP push is handled normally.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallEnded');
+        debugPrint('✅ Native notified: markCallEnded');
+      } catch (e) {
+        debugPrint('⚠️ markCallEnded channel error: $e');
+      }
+    }
+
     _updateStatus('Ready');
   }
 
@@ -823,6 +841,10 @@ class WhatsAppCallingService {
       throw Exception('No active incoming call');
     }
 
+    if (businessApiKey.isEmpty) {
+      throw Exception('WhatsApp Business API key not configured. Please contact your admin.');
+    }
+
     String safeSdp = _pendingSdp!;
     String safeCallId = _pendingCallId!;
 
@@ -830,6 +852,20 @@ class WhatsAppCallingService {
     currentCallId = safeCallId;
     _isCallActive = true;
     _callAccepted = true;
+
+    // Tell native AppDelegate that a call is now active so any delayed VoIP
+    // retry push is blocked from creating a second CallKit incoming-call UI.
+    // This is critical for socket-originated calls where AppDelegate never ran
+    // pushRegistry and its isCallActive flag is still false.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallAccepted');
+        debugPrint('✅ Native notified: markCallAccepted');
+      } catch (e) {
+        debugPrint('⚠️ markCallAccepted channel error: $e');
+      }
+    }
 
     await _requestPermissions();
     await _createPeerConnection();
@@ -866,7 +902,12 @@ class WhatsAppCallingService {
         .timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to answer: ${response.statusCode}');
+      try {
+        final errorBody = jsonDecode(response.body);
+        throw Exception(errorBody['error'] ?? errorBody['message'] ?? 'Failed to answer call (${response.statusCode})');
+      } catch (_) {
+        throw Exception('Failed to answer call (${response.statusCode})');
+      }
     }
 
     _updateStatus('Connected');
@@ -1436,7 +1477,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                           color: Color(0xFF1F2C34)),
                       onPressed: () {
                         widget.callingService.terminateCall();
-                        Get.back();
+                        _handleCallEnded('Call ended');
                       }),
                   const Spacer(),
                   if (_isConnected && !_isEnded)
@@ -1577,7 +1618,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
               GestureDetector(
                 onTap: _isEnded
                     ? () => Get.back()
-                    : () => widget.callingService.terminateCall(),
+                    : () {
+                        widget.callingService.terminateCall();
+                        _handleCallEnded('Call ended');
+                      },
                 child: Container(
                   width: 65,
                   height: 65,
@@ -1694,6 +1738,7 @@ class GlobalCallListenerService {
   WhatsAppCallingService? _service;
   bool _callScreenOpen = false;
   bool _isInitialized = false;
+  bool _isInitializing = false;
   Map<String, dynamic>? pendingCall;
   StreamSubscription? _callkitSubscription;
 
@@ -1731,6 +1776,12 @@ class GlobalCallListenerService {
     required int adminId,
     required String businessApiKey,
   }) async {
+    // Guard against concurrent calls (e.g. onReady + onIncomingVoipCall racing).
+    if (_isInitializing) {
+      debugPrint('⏭️ GlobalListener already initializing — skipping duplicate call');
+      return;
+    }
+
     // If already set up and a pending/active call is in progress, never tear
     // down — just reconnect the socket if it dropped. Tearing down here would
     // destroy the pending SDP that was stored before the user answered.
@@ -1751,125 +1802,130 @@ class GlobalCallListenerService {
       }
     }
 
+    _isInitializing = true;
     debugPrint('🌐 GlobalListener initializing...');
 
-    if (_service != null) {
-      _service!.onStatusChange = null;
-      _service!.onCallEnded = null;
-      _service!.onError = null;
-      _service!.onIncomingCall = null;
-      await _service!.cleanupCall();
-      _service!.socket?.disconnect();
-      _service!.socket?.dispose();
-      _service = null;
-    }
-
-    await _callkitSubscription?.cancel();
-    _isInitialized = false;
-
-    _service = WhatsAppCallingService(
-      userId: userId,
-      adminId: adminId,
-      userRole: 'agent',
-      businessApiKey: businessApiKey,
-    );
-    _service!.isGlobalListener = true;
-    await _service!.initialize();
-
-    // ============================================
-    // CALLKIT EVENT LISTENER
-    // ============================================
-    _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
-      debugPrint('📞 CallKit EVENT: $event');
-
-      // ✅ v3.0.0 — sealed class pattern (Event enum removed)
-      if (event is CallEventActionCallAccept) {
-        debugPrint('📞 ACCEPT CLICKED');
-
-        final prefs = await SharedPreferences.getInstance();
-        final callId = prefs.getString('pending_call_id');
-        final sessionString = prefs.getString('pending_call_session');
-        final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
-
-        if (callId == null || sessionString == null) return;
-
-        final session = jsonDecode(sessionString);
-
-        _service?.setPendingCall(callId: callId, sdp: session['sdp']);
-
-        if (_service?.socket?.connected != true) {
-          _service?.socket?.connect();
-          await Future.delayed(const Duration(seconds: 2));
-        }
-
-        // ✅ FOREGROUND
-        if (isAppInForeground) {
-          debugPrint('🟢 FOREGROUND FLOW');
-          if (_callScreenOpen) {
-            debugPrint('⚠️ Screen already open');
-            return;
-          }
-          openCallScreen(
-            service: _service!,
-            callerName: callerName,
-            callerNumber: callerNumber,
-            sdp: session['sdp'],
-            callId: callId,
-          );
-        }
-
-        // #changedWithJClaude — Bug 4: removed answerCall() + _waitForSocketConnected +
-        // _quickAcceptToServer from the background path. getUserMedia() fails silently in
-        // iOS background (no active audio session), and the socket wait (up to 12 s) races
-        // the server timeout. Now we only store pending nav; the full WebRTC handshake runs
-        // in IncomingCallScreen.initState() once CallKit has activated the audio session.
-        // Also deleted the now-unused _waitForSocketConnected and _quickAcceptToServer helpers.
-        // BACKGROUND / KILLED
-        else {
-          debugPrint('🔴 BACKGROUND FLOW — deferring WebRTC to foreground');
-
-          final bgUserId = await WhatsAppCallingConfig.getUserId();
-          final bgAdminId = await WhatsAppCallingConfig.getAdminId();
-          final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
-          final avatar =
-              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
-
-          // Store nav so AppLifecycleObserver.resumed opens the call screen.
-          // Do NOT call answerCall() here — iOS audio session is not active in
-          // background, getUserMedia() fails silently, and the SDP exchange
-          // would race against the server timeout before the UI even opens.
-          // The full WebRTC handshake runs in IncomingCallScreen.initState()
-          // once the app foregrounds and the audio session is activated by CallKit.
-          WhatsAppCallingConfig.storePendingNavigation({
-            'userId': bgUserId,
-            'adminId': bgAdminId,
-            'apiKey': bgApiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          });
-          debugPrint('✅ Pending navigation stored — will open on foreground');
-        }
-      } else if (event is CallEventActionCallTimeout) {
-        debugPrint('📞 Call Timeout');
-        await _service?.terminateCall();
-      } else if (event is CallEventActionCallEnded) {
-        debugPrint('📞 Call Ended');
-        await _service?.terminateCall();
-      } else if (event is CallEventActionCallToggleAudioSession) {
-        debugPrint('📞 Audio session toggled');
-      } else {
-        debugPrint('📞 Unhandled CallKit event: $event');
+    try {
+      if (_service != null) {
+        _service!.onStatusChange = null;
+        _service!.onCallEnded = null;
+        _service!.onError = null;
+        _service!.onIncomingCall = null;
+        await _service!.cleanupCall();
+        _service!.socket?.disconnect();
+        _service!.socket?.dispose();
+        _service = null;
       }
-    }, onError: (e, stack) {
-      // flutter_callkit_incoming throws FormatException for ACTION_CALL_TOGGLE_AUDIO_SESSION
-      // when iOS fires it without an id — swallow the error so the subscription stays alive.
-      debugPrint('⚠️ CallKit stream error (ignored): $e');
-    }, cancelOnError: false);
 
-    _isInitialized = true;
-    debugPrint('✅ GlobalCallListenerService initialized');
+      await _callkitSubscription?.cancel();
+      _isInitialized = false;
+
+      _service = WhatsAppCallingService(
+        userId: userId,
+        adminId: adminId,
+        userRole: 'agent',
+        businessApiKey: businessApiKey,
+      );
+      _service!.isGlobalListener = true;
+      await _service!.initialize();
+
+      // ============================================
+      // CALLKIT EVENT LISTENER
+      // ============================================
+      _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
+        debugPrint('📞 CallKit EVENT: $event');
+
+        // ✅ v3.0.0 — sealed class pattern (Event enum removed)
+        if (event is CallEventActionCallAccept) {
+          debugPrint('📞 ACCEPT CLICKED');
+
+          final prefs = await SharedPreferences.getInstance();
+          final callId = prefs.getString('pending_call_id');
+          final sessionString = prefs.getString('pending_call_session');
+          final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
+          final callerNumber = prefs.getString('pending_caller_number') ?? '';
+
+          if (callId == null || sessionString == null) return;
+
+          final session = jsonDecode(sessionString);
+
+          _service?.setPendingCall(callId: callId, sdp: session['sdp']);
+
+          if (_service?.socket?.connected != true) {
+            _service?.socket?.connect();
+            await Future.delayed(const Duration(seconds: 2));
+          }
+
+          // ✅ FOREGROUND
+          if (isAppInForeground) {
+            debugPrint('🟢 FOREGROUND FLOW');
+            if (_callScreenOpen) {
+              debugPrint('⚠️ Screen already open');
+              return;
+            }
+            openCallScreen(
+              service: _service!,
+              callerName: callerName,
+              callerNumber: callerNumber,
+              sdp: session['sdp'],
+              callId: callId,
+            );
+          }
+
+          // #changedWithJClaude — Bug 4: removed answerCall() + _waitForSocketConnected +
+          // _quickAcceptToServer from the background path. getUserMedia() fails silently in
+          // iOS background (no active audio session), and the socket wait (up to 12 s) races
+          // the server timeout. Now we only store pending nav; the full WebRTC handshake runs
+          // in IncomingCallScreen.initState() once CallKit has activated the audio session.
+          // Also deleted the now-unused _waitForSocketConnected and _quickAcceptToServer helpers.
+          // BACKGROUND / KILLED
+          else {
+            debugPrint('🔴 BACKGROUND FLOW — deferring WebRTC to foreground');
+
+            final bgUserId = await WhatsAppCallingConfig.getUserId();
+            final bgAdminId = await WhatsAppCallingConfig.getAdminId();
+            final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
+            final avatar =
+                'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+
+            // Store nav so AppLifecycleObserver.resumed opens the call screen.
+            // Do NOT call answerCall() here — iOS audio session is not active in
+            // background, getUserMedia() fails silently, and the SDP exchange
+            // would race against the server timeout before the UI even opens.
+            // The full WebRTC handshake runs in IncomingCallScreen.initState()
+            // once the app foregrounds and the audio session is activated by CallKit.
+            WhatsAppCallingConfig.storePendingNavigation({
+              'userId': bgUserId,
+              'adminId': bgAdminId,
+              'apiKey': bgApiKey,
+              'callerNumber': callerNumber,
+              'callerName': callerName,
+              'avatar': avatar,
+            });
+            debugPrint('✅ Pending navigation stored — will open on foreground');
+          }
+        } else if (event is CallEventActionCallTimeout) {
+          debugPrint('📞 Call Timeout');
+          await _service?.terminateCall();
+        } else if (event is CallEventActionCallEnded) {
+          debugPrint('📞 Call Ended');
+          await _service?.terminateCall();
+        } else if (event is CallEventActionCallToggleAudioSession) {
+          debugPrint('📞 Audio session toggled');
+        } else {
+          debugPrint('📞 Unhandled CallKit event: $event');
+        }
+      }, onError: (e, stack) {
+        // flutter_callkit_incoming throws FormatException for ACTION_CALL_TOGGLE_AUDIO_SESSION
+        // when iOS fires it without an id — swallow the error so the subscription stays alive.
+        debugPrint('⚠️ CallKit stream error (ignored): $e');
+      }, cancelOnError: false);
+
+      _isInitialized = true;
+      debugPrint('✅ GlobalCallListenerService initialized');
+    } finally {
+      _isInitializing = false;
+    }
   }
 
   void dispose() {

@@ -86,6 +86,13 @@ class WhatsAppCallingConfig {
     debugPrint('📦 _pendingNavigation stored: ${nav['callerName']}');
   }
 
+  // Returns true if any call is already active or accepted on the Dart side.
+  // Used to guard against late/duplicate VoIP push events.
+  static bool _isAnyCallActiveOrAccepted() {
+    final svc = GlobalCallListenerService.instance.service;
+    return svc != null && (svc.isCallActive || svc.callAccepted);
+  }
+
   // ============================================
   // iOS — Native MethodChannel init
   // Android pe yeh call mat karo (Platform check se handle hoga)
@@ -129,6 +136,16 @@ class WhatsAppCallingConfig {
         final callerName = args?['callerName'] as String? ?? 'Unknown';
         final uuid = args?['uuid'] as String? ?? '';
         debugPrint('📞 Incoming VoIP: $callerName');
+
+        // Backup guard: if the Dart-side service already accepted a call (socket
+        // or native path), this push is a late retry — ignore it entirely.
+        // The primary guard is isCallActive in AppDelegate (native), but this
+        // catches any edge cases where the push slips through before native is updated.
+        if (_isAnyCallActiveOrAccepted()) {
+          debugPrint(
+              '⚠️ onIncomingVoipCall ignored — call already active/accepted');
+          break;
+        }
 
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
@@ -226,13 +243,20 @@ class WhatsAppCallingConfig {
 
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
-        await FlutterCallkitIncoming.endAllCalls();
-        final svc2 = GlobalCallListenerService.instance.service;
-        await svc2?.cleanupCall();
+        // terminateCall() must run BEFORE endAllCalls() so that currentCallId
+        // is still set when the HTTP /terminate-whatsapp-call goes out.
+        // Calling endAllCalls() first fires CallEventActionCallEnded on the
+        // stream → that calls terminateCall() asynchronously → but by then
+        // cleanupCall() has already nulled currentCallId → backendCallId = null
+        // → server never receives the terminate signal → other party stays on.
+        final svcEnd = GlobalCallListenerService.instance.service;
+        await svcEnd?.terminateCall();
+        // Safety net: if service is absent, at least dismiss the flutter CallKit UI.
+        if (svcEnd == null) await FlutterCallkitIncoming.endAllCalls();
         // Notify the active call screen so it navigates back.
         // Without this, the UI stays open forever when the user ends
         // the call from the native CallKit screen (lock screen).
-        svc2?.onCallEnded?.call();
+        svcEnd?.onCallEnded?.call();
         break;
 
       default:
@@ -351,17 +375,20 @@ class WhatsAppCallingConfig {
   // ============================================
   static Future<String> getBusinessApiKey() async {
     try {
-      final apiKey = await _userData.getApiKey();
-      return apiKey.isEmpty ? businessApiKeyFallback : apiKey;
+      final apiKey = await _userData.getWhatsAppBusinessApiKey();
+      if (apiKey.isNotEmpty) return apiKey;
+      debugPrint('⚠️ getBusinessApiKey: WhatsApp Business API key not found in storage');
+      return '';
     } catch (e) {
-      return businessApiKeyFallback;
+      debugPrint('❌ getBusinessApiKey error: $e');
+      return '';
     }
   }
 
   static Future<int> getUserId() async {
     try {
       final userId = await _userData.getLoggedInUserId();
-      return (userId == null || userId == 0) ? 0 : userId;
+      return userId == 0 ? 0 : userId;
     } catch (e) {
       return 0;
     }
@@ -370,7 +397,7 @@ class WhatsAppCallingConfig {
   static Future<int> getAdminId() async {
     try {
       final adminIdStr = await _userData.getParentUserId();
-      if (adminIdStr == null || adminIdStr.trim().isEmpty) return await getUserId();
+      if (adminIdStr.trim().isEmpty) return await getUserId();
       final adminId = int.tryParse(adminIdStr);
       return (adminId == null || adminId == 0) ? await getUserId() : adminId;
     } catch (e) {
@@ -634,6 +661,14 @@ class WhatsAppCallingConfig {
       if (Get.isDialogOpen ?? false) Get.back();
       if (userId == 0) {
         _showError('User credentials not found');
+        return;
+      }
+      if (apiKey.isEmpty) {
+        _showError('WhatsApp Business API key not configured. Please contact your admin.');
+        return;
+      }
+      if (adminId == 0) {
+        _showError('Admin account not found. Please re-login.');
         return;
       }
 

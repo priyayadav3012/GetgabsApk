@@ -11,6 +11,9 @@ import WebRTC
     private let provider: CXProvider
     private let callController = CXCallController()
     private var activeCalls: [UUID: String] = [:]
+    // Tracks UUIDs that have been answered (not just ringing).
+    // Used to prevent a second VoIP push from terminating an active call.
+    private var answeredCallUUIDs: Set<UUID> = []
 
     override init() {
         let config = CXProviderConfiguration(localizedName: "GetGabs")
@@ -47,7 +50,16 @@ import WebRTC
 
     // MARK: - INCOMING CALL
     @objc public func reportIncomingCall(uuid: UUID, handle: String) {
-        // End previous calls if any active
+        // If any call in activeCalls has already been answered, a second VoIP push
+        // must not interrupt it. Return immediately — do NOT show a new CallKit UI
+        // and do NOT terminate the in-progress call.
+        let hasAnsweredCall = activeCalls.keys.contains { answeredCallUUIDs.contains($0) }
+        if hasAnsweredCall {
+            print("⚠️ reportIncomingCall: call already answered — ignoring duplicate push for \(uuid.uuidString)")
+            return
+        }
+
+        // Only terminate calls that are still ringing (unanswered).
         if !activeCalls.isEmpty {
             for oldUuid in activeCalls.keys {
                 provider.reportCall(with: oldUuid, endedAt: Date(), reason: .failed)
@@ -85,6 +97,10 @@ import WebRTC
         // is deferred to didActivate so it runs after the system has activated the
         // session (see H-2 fix).
         action.fulfill()
+
+        // Mark this UUID as answered so reportIncomingCall can guard against a
+        // second VoIP push arriving while this call is active.
+        answeredCallUUIDs.insert(action.callUUID)
 
         let uuid = action.callUUID.uuidString.lowercased()
 
@@ -143,6 +159,7 @@ import WebRTC
     public func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         print("📵 Call Ended")
         activeCalls.removeValue(forKey: action.callUUID)
+        answeredCallUUIDs.remove(action.callUUID)
 
         NotificationCenter.default.post(
             name: NSNotification.Name("CALL_ENDED_NATIVE"),
@@ -203,6 +220,7 @@ import WebRTC
     // MARK: - PROVIDER RESET
     public func providerDidReset(_ provider: CXProvider) {
         activeCalls.removeAll()
+        answeredCallUUIDs.removeAll()
         print("♻️ Provider reset")
     }
 

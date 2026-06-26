@@ -280,14 +280,21 @@ class _MyAppState extends State<MyApp> {
 
     debugPrint('📞 Pending call found: $callId');
 
-    // ✅ Active calls check
-    final activeCalls = await FlutterCallkitIncoming.activeCalls();
-    debugPrint('📞 Active Calls on start: ${activeCalls.length}');
-
-    if (activeCalls.isEmpty) {
-      debugPrint('🚫 No active call — clearing prefs');
-      await _clearCallPrefs(prefs);
-      return;
+    // On iOS, VoIP push calls are owned by the native CallManager (CXProvider).
+    // FlutterCallkitIncoming.activeCalls() only tracks calls shown via
+    // FlutterCallkitIncoming.showCallkitIncoming() — it always returns empty for
+    // VoIP push calls on iOS. Using it as a gate here clears prefs and aborts
+    // the recovery flow 1.5 s into the killed-state answer sequence.
+    if (!Platform.isIOS) {
+      final activeCalls = await FlutterCallkitIncoming.activeCalls();
+      debugPrint('📞 Active Calls on start: ${activeCalls.length}');
+      if (activeCalls.isEmpty) {
+        debugPrint('🚫 No active call — clearing prefs');
+        await _clearCallPrefs(prefs);
+        return;
+      }
+    } else {
+      debugPrint('📞 iOS: skipping activeCalls() — VoIP call managed natively by CallManager');
     }
 
     // #changedWithJClaude — use initializeCallListener (reads userId from GetStorage)
