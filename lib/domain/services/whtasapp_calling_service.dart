@@ -324,7 +324,19 @@ class WhatsAppCallingService {
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
       } else if (isGlobalListener) {
-        await _showCallKitForIncoming(callData);
+        // On iOS in background/minimized state, skip showing flutter_callkit_incoming's
+        // CallKit UI here. The VoIP push already caused CallManager.reportIncomingCall()
+        // to register the call with its own CXProvider. If we also call
+        // _showCallKitForIncoming, flutter_callkit_incoming races to claim the same UUID
+        // first; when it wins, CallManager.provider(_:didActivate:) never fires,
+        // RTCAudioSession.isAudioEnabled stays false, and WebRTC audio fails entirely.
+        // In background, let the VoIP push (CallManager) own the CallKit session so
+        // didActivate fires correctly. The pending call state is already set above.
+        if (Platform.isIOS && !isAppInForeground) {
+          debugPrint('📞 iOS background: skipping flutter CallKit — VoIP push owns CallKit session');
+        } else {
+          await _showCallKitForIncoming(callData);
+        }
       } else {
         _showIncomingCallPopup(callData);
       }
