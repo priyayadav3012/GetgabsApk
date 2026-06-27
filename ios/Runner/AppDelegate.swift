@@ -128,10 +128,7 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
             // didActivate would have done: notify RTCAudioSession that the session is
             // active and enable audio.
             else if call.method == "activateWebRTCAudio" {
-                print("🔊 activateWebRTCAudio — enabling RTCAudioSession manually")
-                let rtcSession = RTCAudioSession.sharedInstance()
-                rtcSession.audioSessionDidActivate(AVAudioSession.sharedInstance())
-                rtcSession.isAudioEnabled = true
+                CallManager.shared.activateAudioSession()
                 result(nil)
             }
             else {

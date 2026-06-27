@@ -224,6 +224,18 @@ import WebRTC
         print("♻️ Provider reset")
     }
 
+    // MARK: - MANUAL AUDIO SESSION ACTIVATION
+    // Called when flutter_callkit_incoming wins the CXProvider race so
+    // CallManager.provider(_:didActivate:) never fires. Replicates what
+    // didActivate does: hand the active session to RTCAudioSession and
+    // enable audio so getUserMedia() succeeds in answerCall().
+    @objc public func activateAudioSession() {
+        print("🔊 CallManager.activateAudioSession — enabling RTCAudioSession manually")
+        let rtcSession = RTCAudioSession.sharedInstance()
+        rtcSession.audioSessionDidActivate(AVAudioSession.sharedInstance())
+        rtcSession.isAudioEnabled = true
+    }
+
     // MARK: - PROGRAMMATIC END CALL
     @objc public func endCallProgrammatically(uuid: UUID) {
         let action = CXEndCallAction(call: uuid)
