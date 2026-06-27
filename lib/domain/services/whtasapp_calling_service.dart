@@ -1849,6 +1849,21 @@ class GlobalCallListenerService {
         if (event is CallEventActionCallAccept) {
           debugPrint('📞 ACCEPT CLICKED');
 
+          // On iOS, flutter_callkit_incoming's own CXProvider handled this accept,
+          // meaning CallManager.provider(_:didActivate:) will NOT fire. Manually
+          // activate the WebRTC audio session so getUserMedia() succeeds in
+          // answerCall(). This mirrors what CallManager.didActivate does:
+          // rtcSession.audioSessionDidActivate + isAudioEnabled = true.
+          if (Platform.isIOS) {
+            try {
+              await const MethodChannel('com.getgabs/calls')
+                  .invokeMethod('activateWebRTCAudio');
+              debugPrint('🔊 WebRTC audio session activated via flutter_callkit_incoming path');
+            } catch (e) {
+              debugPrint('⚠️ activateWebRTCAudio error: $e');
+            }
+          }
+
           final prefs = await SharedPreferences.getInstance();
           final callId = prefs.getString('pending_call_id');
           final sessionString = prefs.getString('pending_call_session');

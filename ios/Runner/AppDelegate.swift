@@ -121,6 +121,19 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
                 self?.isCallActive = false
                 result(nil)
             }
+            // Called by Flutter when flutter_callkit_incoming wins the CXProvider race
+            // (socket event arrived before VoIP push). In that case CallManager's
+            // provider(_:didActivate:) never fires, so RTCAudioSession.isAudioEnabled
+            // stays false and WebRTC audio never starts. This method replicates what
+            // didActivate would have done: notify RTCAudioSession that the session is
+            // active and enable audio.
+            else if call.method == "activateWebRTCAudio" {
+                print("🔊 activateWebRTCAudio — enabling RTCAudioSession manually")
+                let rtcSession = RTCAudioSession.sharedInstance()
+                rtcSession.audioSessionDidActivate(AVAudioSession.sharedInstance())
+                rtcSession.isAudioEnabled = true
+                result(nil)
+            }
             else {
                 result(FlutterMethodNotImplemented)
             }
