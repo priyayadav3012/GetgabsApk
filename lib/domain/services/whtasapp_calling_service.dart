@@ -323,9 +323,13 @@ class WhatsAppCallingService {
 
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
-      } else if (isGlobalListener) {
+      } else if (isGlobalListener && !Platform.isIOS) {
+        // iOS: VoIP push (PushKit) always arrives and CallManager shows the
+        // native CallKit UI. Registering a second CXProvider UUID here races
+        // with CallManager and causes the audio/disconnect bugs. Skip on iOS;
+        // VoIP push owns the entire incoming-call UI and answer flow.
         await _showCallKitForIncoming(callData);
-      } else {
+      } else if (!Platform.isIOS) {
         _showIncomingCallPopup(callData);
       }
     });
@@ -668,6 +672,20 @@ class WhatsAppCallingService {
         if (callkitId != null && callkitId.isNotEmpty) {
           debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
           await FlutterCallkitIncoming.endCall(callkitId);
+          // Also end CallManager's CXProvider call — covers the case where the
+          // VoIP push arrived first and CallManager registered the UUID before
+          // flutter_callkit_incoming could. FlutterCallkitIncoming.endCall only
+          // dismisses its own provider; CallManager's native CallKit UI stays
+          // visible until endCallProgrammatically is called for its UUID.
+          if (Platform.isIOS) {
+            try {
+              await const MethodChannel('com.getgabs/calls')
+                  .invokeMethod('endNativeCall', {'uuid': callkitId});
+              debugPrint('✅ Native CallKit call ended: $callkitId');
+            } catch (e) {
+              debugPrint('⚠️ endNativeCall error: $e');
+            }
+          }
         }
 
         await FlutterCallkitIncoming.endAllCalls();
@@ -1040,6 +1058,15 @@ class WhatsAppCallingService {
           await FlutterCallkitIncoming.endCall(callkitId);
         } catch (e) {
           debugPrint('❌ endCall error: $e');
+        }
+        if (Platform.isIOS) {
+          try {
+            await const MethodChannel('com.getgabs/calls')
+                .invokeMethod('endNativeCall', {'uuid': callkitId});
+            debugPrint('✅ Native CallKit call ended: $callkitId');
+          } catch (e) {
+            debugPrint('⚠️ endNativeCall error: $e');
+          }
         }
       }
 
@@ -1848,21 +1875,6 @@ class GlobalCallListenerService {
         // ✅ v3.0.0 — sealed class pattern (Event enum removed)
         if (event is CallEventActionCallAccept) {
           debugPrint('📞 ACCEPT CLICKED');
-
-          // On iOS, flutter_callkit_incoming's own CXProvider handled this accept,
-          // meaning CallManager.provider(_:didActivate:) will NOT fire. Manually
-          // activate the WebRTC audio session so getUserMedia() succeeds in
-          // answerCall(). This mirrors what CallManager.didActivate does:
-          // rtcSession.audioSessionDidActivate + isAudioEnabled = true.
-          if (Platform.isIOS) {
-            try {
-              await const MethodChannel('com.getgabs/calls')
-                  .invokeMethod('activateWebRTCAudio');
-              debugPrint('🔊 WebRTC audio session activated via flutter_callkit_incoming path');
-            } catch (e) {
-              debugPrint('⚠️ activateWebRTCAudio error: $e');
-            }
-          }
 
           final prefs = await SharedPreferences.getInstance();
           final callId = prefs.getString('pending_call_id');
