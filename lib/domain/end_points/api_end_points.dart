@@ -196,18 +196,33 @@ class WhatsAppCallingConfig {
         final uuid2 = args2?['uuid'] as String? ?? '';
 
         final prefs2 = await SharedPreferences.getInstance();
-        // In background the socket may not have reconnected yet when
-        // tryNotifyFlutter first fires. Block on a Completer that the socket's
-        // whatsapp_call_incoming handler completes the instant it finishes
-        // writing pending_call_session. 3 s timeout covers the edge case where
-        // the call is dropped before the socket reconnects.
         String sessionStr2 = prefs2.getString('pending_call_session') ?? '';
         if (sessionStr2.isEmpty) {
+          // Session is written by the socket's whatsapp_call_incoming handler.
+          // In background the socket is likely disconnected — reconnect it FIRST
+          // so the server sends whatsapp_call_incoming, which writes the session
+          // and completes the Completer. Without reconnecting here the Completer
+          // would wait forever and time out (the socket only reconnects later in
+          // the original code, after the Completer was supposed to resolve).
+          //
+          // Do NOT call initializeCallListener() if a service already exists —
+          // it tears down GlobalCallListenerService (running cleanupCall) which
+          // wipes SharedPreferences before WhatsAppCallingScreen can read them.
+          final svc0 = GlobalCallListenerService.instance.service;
+          if (svc0 == null || !GlobalCallListenerService.instance.isInitialized) {
+            await initializeCallListener();
+          } else if (svc0.socket?.connected != true) {
+            svc0.socket?.connect();
+            debugPrint('🔄 Socket reconnect triggered to fetch call session');
+          }
+
           debugPrint('⏳ Session not ready — awaiting socket write');
           _sessionCompleter = Completer<String>();
           sessionStr2 = await _sessionCompleter!.future
               .timeout(const Duration(seconds: 3), onTimeout: () => '');
           _sessionCompleter = null;
+          // Reload so caller name/number written by the socket handler are visible.
+          await prefs2.reload();
         }
         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
         final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
@@ -227,10 +242,9 @@ class WhatsAppCallingConfig {
           break;
         }
 
-        // Do NOT call initializeCallListener() here — it tears down and recreates
-        // GlobalCallListenerService (running cleanupCall which wipes SharedPreferences
-        // and clears hasActivePendingCall) before WhatsAppCallingScreen can read them.
-        // Only initialise if no service exists yet; otherwise reuse and reconnect socket.
+        // Service was already reconnected above if session was missing.
+        // If session was present (foreground / socket was already connected),
+        // still ensure the service exists and socket is live.
         final existingSvc = GlobalCallListenerService.instance.service;
         if (existingSvc == null || !GlobalCallListenerService.instance.isInitialized) {
           await initializeCallListener();
