@@ -323,13 +323,31 @@ class WhatsAppCallingService {
 
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
-      } else if (isGlobalListener && !Platform.isIOS) {
-        // iOS: VoIP push (PushKit) always arrives and CallManager shows the
-        // native CallKit UI. Registering a second CXProvider UUID here races
-        // with CallManager and causes the audio/disconnect bugs. Skip on iOS;
-        // VoIP push owns the entire incoming-call UI and answer flow.
+      } else if (isGlobalListener && Platform.isIOS) {
+        // iOS: VoIP push (PushKit) owns the CallKit UI — skip _showCallKitForIncoming
+        // to avoid racing CallManager's CXProvider. But still persist the call data
+        // to SharedPreferences here, because the VoIP push payload typically does not
+        // include the SDP/session. onNativeCallAnswered reads pending_call_session to
+        // get the SDP; without this write it fails with "session missing".
+        final sdpOffer = callData['sdpOffer']?.toString() ?? _pendingSdp ?? '';
+        final callKitId =
+            _getValidCallKitId(callData['callId']?.toString() ?? '');
+        currentCallKitId = callKitId;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+            'pending_call_id', callData['callId']?.toString() ?? '');
+        await prefs.setString('pending_callkit_id', callKitId);
+        await prefs.setString(
+            'pending_caller_name', callData['callerName']?.toString() ?? '');
+        await prefs.setString(
+            'pending_caller_number', callData['from']?.toString() ?? '');
+        await prefs.setString('pending_call_session',
+            jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}));
+        debugPrint(
+            '✅ iOS: call data persisted from socket — VoIP push handles UI');
+      } else if (isGlobalListener) {
         await _showCallKitForIncoming(callData);
-      } else if (!Platform.isIOS) {
+      } else {
         _showIncomingCallPopup(callData);
       }
     });
