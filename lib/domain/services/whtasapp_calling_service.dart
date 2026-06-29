@@ -341,8 +341,11 @@ class WhatsAppCallingService {
             'pending_caller_name', callData['callerName']?.toString() ?? '');
         await prefs.setString(
             'pending_caller_number', callData['from']?.toString() ?? '');
-        await prefs.setString('pending_call_session',
-            jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}));
+        final sessionJson = jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'});
+        await prefs.setString('pending_call_session', sessionJson);
+        // Unblock onNativeCallAnswered if it arrived before this write finished
+        // (background: socket reconnected after user already accepted the call).
+        WhatsAppCallingConfig.notifySessionAvailable(sessionJson);
         debugPrint(
             '✅ iOS: call data persisted from socket — VoIP push handles UI');
       } else if (isGlobalListener) {

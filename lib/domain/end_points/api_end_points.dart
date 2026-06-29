@@ -1,6 +1,7 @@
 // File: lib/domain/end_points/api_end_points.dart
 // ✅ UNIFIED FILE — Works for both Android & iOS
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
 
@@ -69,6 +70,19 @@ class WhatsAppCallingConfig {
   static const platform = MethodChannel('com.getgabs/calls');
 
   static Map<String, dynamic>? _pendingNavigation;
+
+  // Completer used to unblock onNativeCallAnswered when it fires before the
+  // socket's whatsapp_call_incoming handler has written pending_call_session.
+  // Completed by notifySessionAvailable(); times out after 3 s so a dropped
+  // call does not stall the handler indefinitely.
+  static Completer<String>? _sessionCompleter;
+
+  static void notifySessionAvailable(String session) {
+    if (_sessionCompleter != null && !_sessionCompleter!.isCompleted) {
+      _sessionCompleter!.complete(session);
+    }
+    _sessionCompleter = null;
+  }
 
   // ============================================
   // ✅ FLAVOR CHECK — Android + iOS dono ke liye
@@ -182,13 +196,25 @@ class WhatsAppCallingConfig {
         final uuid2 = args2?['uuid'] as String? ?? '';
 
         final prefs2 = await SharedPreferences.getInstance();
-        final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+        // In background the socket may not have reconnected yet when
+        // tryNotifyFlutter first fires. Block on a Completer that the socket's
+        // whatsapp_call_incoming handler completes the instant it finishes
+        // writing pending_call_session. 3 s timeout covers the edge case where
+        // the call is dropped before the socket reconnects.
+        String sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+        if (sessionStr2.isEmpty) {
+          debugPrint('⏳ Session not ready — awaiting socket write');
+          _sessionCompleter = Completer<String>();
+          sessionStr2 = await _sessionCompleter!.future
+              .timeout(const Duration(seconds: 3), onTimeout: () => '');
+          _sessionCompleter = null;
+        }
         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
         final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
         final callId2 = prefs2.getString('pending_call_id') ?? uuid2;
 
         if (sessionStr2.isEmpty) {
-          debugPrint('❌ Session missing for answer');
+          debugPrint('❌ Session missing for answer — call likely dropped');
           break;
         }
 
