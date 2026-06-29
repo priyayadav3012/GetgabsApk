@@ -620,8 +620,14 @@ class WhatsAppCallingConfig {
     _pendingNavigation = null;
 
     if (Get.context == null) {
-      debugPrint('❌ Context null — storing back for retry');
+      // Widget tree not ready yet (app still initialising or transitioning).
+      // Store nav back and re-invoke on the next rendered frame — context is
+      // guaranteed to be non-null by then, so navigation fires without any
+      // artificial delay or polling loop.
+      debugPrint('⏳ Context not ready — queuing for next frame');
       _pendingNavigation = nav;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => handlePendingCallNavigation());
       return;
     }
 
