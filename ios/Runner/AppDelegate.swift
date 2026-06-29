@@ -131,6 +131,14 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
                 CallManager.shared.activateAudioSession()
                 result(nil)
             }
+            // Called once before the call screen opens so the iOS permission
+            // dialog appears before WebRTC setup starts, not mid-setup where
+            // it would stall getUserMedia() and cause the first call to time out.
+            else if call.method == "requestMicrophonePermission" {
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    DispatchQueue.main.async { result(granted) }
+                }
+            }
             else {
                 result(FlutterMethodNotImplemented)
             }

@@ -645,6 +645,19 @@ class WhatsAppCallingConfig {
       return;
     }
 
+    // On iOS, ensure microphone permission is resolved before the call screen
+    // opens. On first install getUserMedia() triggers the system dialog — if
+    // that happens mid-WebRTC-setup the server's answer timeout fires while
+    // the user is reading the dialog, dropping the first call. Requesting it
+    // here (while the screen is transitioning) means permission is already
+    // granted by the time answerCall() calls getUserMedia(). On subsequent
+    // calls the native API returns instantly (permission already cached).
+    if (Platform.isIOS) {
+      try {
+        await platform.invokeMethod('requestMicrophonePermission');
+      } catch (_) {}
+    }
+
     await Future.delayed(const Duration(milliseconds: 300));
 
     debugPrint('🚀 Opening Calling Screen: ${nav['callerName']}');
