@@ -38,7 +38,7 @@ class WhatsAppCallingScreen extends StatefulWidget {
 }
 
 class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   WhatsAppCallingService? _callingService;
 
   bool get isMessagedly => (AppTheme.unreadMessagesColor.value != 0xFF25D366 &&
@@ -56,12 +56,19 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   bool _isConnected = false;
   bool _isEnded = false;
   bool _isExternalService = false;
+  // Tracks whether _initCall() has been invoked. On iOS, _initCall() must wait
+  // until the app is in foreground so CallKit's didActivate has set
+  // isAudioEnabled = true. If the screen opens in background (killed-state
+  // pre-launch via _checkInitialCall), the addPostFrameCallback fires before
+  // foreground, so we defer via WidgetsBindingObserver and retry on resumed.
+  bool _initCallDone = false;
 
   late AnimationController _waveController;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _waveController =
         AnimationController(duration: const Duration(seconds: 2), vsync: this)
           ..repeat();
@@ -72,11 +79,26 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     // iOS: defer until after the first frame so CallKit's provider:didActivate:
     // has time to set RTCAudioSession.isAudioEnabled = true before getUserMedia()
     // is called. Without this, audio never starts and the call drops immediately.
+    // If the screen opens while still in background (killed-state pre-launch),
+    // isAppInForeground is false and _initCall is skipped here — it will fire
+    // from didChangeAppLifecycleState when the app transitions to resumed.
     if (Platform.isIOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground) await _initCall();
+        if (isAppInForeground) {
+          _initCallDone = true;
+          await _initCall();
+        }
       });
     } else {
+      _initCallDone = true;
+      _initCall();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_initCallDone && Platform.isIOS) {
+      _initCallDone = true;
       _initCall();
     }
   }
@@ -357,6 +379,8 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WhatsAppCallingConfig.notifyCallScreenClosed();
     _waveController.dispose();
     _timer?.cancel();
 

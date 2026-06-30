@@ -341,13 +341,19 @@ class WhatsAppCallingService {
             'pending_caller_name', callData['callerName']?.toString() ?? '');
         await prefs.setString(
             'pending_caller_number', callData['from']?.toString() ?? '');
-        final sessionJson = jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'});
-        await prefs.setString('pending_call_session', sessionJson);
-        // Unblock onNativeCallAnswered if it arrived before this write finished
-        // (background: socket reconnected after user already accepted the call).
-        WhatsAppCallingConfig.notifySessionAvailable(sessionJson);
-        debugPrint(
-            '✅ iOS: call data persisted from socket — VoIP push handles UI');
+        // Only write session when SDP is non-empty. An empty SDP produces a
+        // valid JSON string that passes the sessionStr.isEmpty check in
+        // onNativeCallAnswered, causing setRemoteDescription to fail silently.
+        if (sdpOffer.isNotEmpty) {
+          final sessionJson = jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'});
+          await prefs.setString('pending_call_session', sessionJson);
+          // Unblock onNativeCallAnswered if it arrived before this write finished
+          // (background: socket reconnected after user already accepted the call).
+          WhatsAppCallingConfig.notifySessionAvailable(sessionJson);
+          debugPrint('✅ iOS: call data persisted from socket — VoIP push handles UI');
+        } else {
+          debugPrint('⚠️ iOS socket: SDP empty — skipping session write, onNativeCallAnswered will wait via Completer');
+        }
       } else if (isGlobalListener) {
         await _showCallKitForIncoming(callData);
       } else {
@@ -768,6 +774,10 @@ class WhatsAppCallingService {
       debugPrint('⚠️ Stream cleanup warning: $e');
     }
 
+    // Reset speakerphone to earpiece so the audio route doesn't bleed into the
+    // next call or app audio if the user had toggled speaker during this call.
+    try { Helper.setSpeakerphoneOn(false); } catch (_) {}
+
     peerConnection = null;
     localStream = null;
     remoteStream = null;
@@ -779,7 +789,7 @@ class WhatsAppCallingService {
     currentCallerName = null;
     isOutgoingCall = false;
     _callAccepted = false;
-    _bufferedIceCandidates.clear(); // #changedWithJClaude
+    _bufferedIceCandidates.clear();
     onStatusChange = null;
     onRemoteStream = null;
     onCallEnded = null;

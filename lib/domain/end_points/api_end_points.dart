@@ -71,9 +71,17 @@ class WhatsAppCallingConfig {
 
   static Map<String, dynamic>? _pendingNavigation;
 
+  // Guard that prevents a second WhatsAppCallingScreen from being pushed while
+  // one is already open. Set in handlePendingCallNavigation(), cleared in
+  // WhatsAppCallingScreen.dispose() via notifyCallScreenClosed().
+  static bool _callScreenOpen = false;
+
+  static void notifyCallScreenOpened() => _callScreenOpen = true;
+  static void notifyCallScreenClosed() => _callScreenOpen = false;
+
   // Completer used to unblock onNativeCallAnswered when it fires before the
   // socket's whatsapp_call_incoming handler has written pending_call_session.
-  // Completed by notifySessionAvailable(); times out after 3 s so a dropped
+  // Completed by notifySessionAvailable(); times out after 6 s so a dropped
   // call does not stall the handler indefinitely.
   static Completer<String>? _sessionCompleter;
 
@@ -219,10 +227,15 @@ class WhatsAppCallingConfig {
           debugPrint('⏳ Session not ready — awaiting socket write');
           _sessionCompleter = Completer<String>();
           sessionStr2 = await _sessionCompleter!.future
-              .timeout(const Duration(seconds: 3), onTimeout: () => '');
+              .timeout(const Duration(seconds: 6), onTimeout: () => '');
           _sessionCompleter = null;
           // Reload so caller name/number written by the socket handler are visible.
           await prefs2.reload();
+          // Fallback: if Completer timed out but socket wrote session to prefs
+          // just before the Completer was created (race), recover it here.
+          if (sessionStr2.isEmpty) {
+            sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+          }
         }
         final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
         final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
@@ -239,6 +252,11 @@ class WhatsAppCallingConfig {
           sdp2 = sessionMap2['sdp'] ?? '';
         } catch (e) {
           debugPrint('❌ SDP parse error: $e');
+          break;
+        }
+
+        if (sdp2.isEmpty) {
+          debugPrint('❌ SDP empty in session — call likely expired before socket wrote offer');
           break;
         }
 
@@ -276,9 +294,11 @@ class WhatsAppCallingConfig {
           'avatar': avatar,
         });
 
-        if (isAppInForeground) {
-          await handlePendingCallNavigation();
-        }
+        // Navigate unconditionally — handlePendingCallNavigation checks
+        // Get.context and queues via addPostFrameCallback if not ready.
+        // Removing the isAppInForeground gate fixes killed-state calls where
+        // the lifecycle transition fires after this handler completes.
+        await handlePendingCallNavigation();
         break;
 
       case 'onCallEndedNatively':
@@ -630,6 +650,12 @@ class WhatsAppCallingConfig {
       return;
     }
 
+    if (_callScreenOpen) {
+      debugPrint('📵 Call screen already open — skipping duplicate navigation');
+      _pendingNavigation = null;
+      return;
+    }
+
     final nav = _pendingNavigation!;
     _pendingNavigation = null;
 
@@ -662,6 +688,7 @@ class WhatsAppCallingConfig {
 
     debugPrint('🚀 Opening Calling Screen: ${nav['callerName']}');
 
+    notifyCallScreenOpened();
     Get.to(
       () => WhatsAppCallingScreen(
         userId: nav['userId'] as int,
