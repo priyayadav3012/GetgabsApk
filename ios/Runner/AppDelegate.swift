@@ -238,7 +238,15 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
         let callId = (data["callId"] as? String)
             ?? (data["call_id"] as? String)
             ?? uuidString
-        let sessionRaw = (data["session"] as? String) ?? ""
+        // Session may arrive as a JSON string OR as a nested dictionary — handle both.
+        var sessionRaw: String = ""
+        if let sessionStr = data["session"] as? String {
+            sessionRaw = sessionStr
+        } else if let sessionDict = data["session"] as? [String: Any],
+                  let jsonData = try? JSONSerialization.data(withJSONObject: sessionDict),
+                  let jsonStr = String(data: jsonData, encoding: .utf8) {
+            sessionRaw = jsonStr
+        }
 
         // Persist call metadata into NSUserDefaults so Flutter's SharedPreferences
         // (which maps to NSUserDefaults on iOS) can read SDP/callId at answer time.
@@ -291,13 +299,20 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
         completion()
         print("✅ Apple push execution lifecycle closed safely.")
 
-        // Async dispatch to Flutter (if Flutter is already awake)
+        // Async dispatch to Flutter (if Flutter is already awake).
+        // Pass all call data via args so Flutter never needs to reload SharedPreferences
+        // for this data — eliminates the NSUserDefaults cache-staleness race in
+        // foreground/background where prefs.reload() may find nothing because the
+        // Flutter SharedPreferences instance was initialised before AppDelegate wrote.
         DispatchQueue.main.async { [weak self] in
             self?.callChannel?.invokeMethod(
                 "onIncomingVoipCall",
                 arguments: [
                     "uuid": uuidString,
-                    "callerName": callerName
+                    "callerName": callerName,
+                    "callerNumber": callerNumber,
+                    "callId": callId,
+                    "session": sessionRaw
                 ]
             )
             print("📱 Delayed background payload dispatched to Flutter channel")

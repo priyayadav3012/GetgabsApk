@@ -9,7 +9,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
-import 'package:getgabs/main.dart' show isAppInForeground;
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -71,10 +70,12 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     ));
     // iOS: defer until after the first frame so CallKit's provider:didActivate:
     // has time to set RTCAudioSession.isAudioEnabled = true before getUserMedia()
-    // is called. Without this, audio never starts and the call drops immediately.
+    // is called. provider:didActivate: fires at action.fulfill() time (~0.5s before
+    // onNativeCallAnswered), so isAudioEnabled=true is guaranteed by the time this
+    // callback fires regardless of whether the app is in foreground or background.
     if (Platform.isIOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground) await _initCall();
+        await _initCall();
       });
     } else {
       _initCall();

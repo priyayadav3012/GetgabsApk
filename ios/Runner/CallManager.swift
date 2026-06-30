@@ -146,7 +146,20 @@ import WebRTC
             if let channel = appDelegate.callChannel {
                 // Claim the UUID before invoking to race-safely prevent checkPendingAnsweredCall
                 appDelegate.pendingAnsweredCallUUID = nil
-                channel.invokeMethod("onNativeCallAnswered", arguments: ["uuid": uuid])
+                // Read call metadata from UserDefaults and pass it via args so Flutter
+                // never needs to reload SharedPreferences — avoids the staleness race.
+                let defaults = UserDefaults.standard
+                let sessionForAnswer  = defaults.string(forKey: "flutter.pending_call_session") ?? ""
+                let callerNameAnswer  = defaults.string(forKey: "flutter.pending_caller_name") ?? ""
+                let callerNumberAnswer = defaults.string(forKey: "flutter.pending_caller_number") ?? ""
+                let callIdAnswer      = defaults.string(forKey: "flutter.pending_call_id") ?? uuid
+                channel.invokeMethod("onNativeCallAnswered", arguments: [
+                    "uuid": uuid,
+                    "session": sessionForAnswer,
+                    "callerName": callerNameAnswer,
+                    "callerNumber": callerNumberAnswer,
+                    "callId": callIdAnswer
+                ])
                 print("✅ Flutter notified: onNativeCallAnswered (attempt \(attempt + 1))")
             } else {
                 print("⏳ Flutter channel not ready (attempt \(attempt + 1)) — retrying…")

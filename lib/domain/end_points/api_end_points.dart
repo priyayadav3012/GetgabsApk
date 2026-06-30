@@ -147,10 +147,27 @@ class WhatsAppCallingConfig {
           break;
         }
 
-        final prefs = await SharedPreferences.getInstance();
-        final sessionStr = prefs.getString('pending_call_session') ?? '';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
-        final callId = prefs.getString('pending_call_id') ?? uuid;
+        // Primary: use session data passed directly via method channel args.
+        // AppDelegate now sends session/callerNumber/callId in the invokeMethod
+        // call, which bypasses the SharedPreferences cache-staleness problem in
+        // foreground/background (where reload() may still find nothing if the
+        // server sends session as a nested dict or if FCM hasn't stored it yet).
+        String sessionStr = args?['session'] as String? ?? '';
+        String callerNumber = args?['callerNumber'] as String? ?? '';
+        String callId = args?['callId'] as String? ?? uuid;
+
+        // Fallback: SharedPreferences (killed-state path or older AppDelegate).
+        if (sessionStr.isEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.reload();
+          sessionStr = prefs.getString('pending_call_session') ?? '';
+          if (callerNumber.isEmpty) {
+            callerNumber = prefs.getString('pending_caller_number') ?? '';
+          }
+          if (callId == uuid) {
+            callId = prefs.getString('pending_call_id') ?? uuid;
+          }
+        }
 
         if (sessionStr.isEmpty) {
           debugPrint('❌ Session missing');
@@ -181,13 +198,50 @@ class WhatsAppCallingConfig {
         final args2 = call.arguments as Map?;
         final uuid2 = args2?['uuid'] as String? ?? '';
 
-        final prefs2 = await SharedPreferences.getInstance();
-        final sessionStr2 = prefs2.getString('pending_call_session') ?? '';
-        final callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
-        final callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
-        final callId2 = prefs2.getString('pending_call_id') ?? uuid2;
+        // Primary: CallManager now passes all call data via args from UserDefaults,
+        // bypassing the SharedPreferences cache-staleness race entirely.
+        String sessionStr2 = args2?['session'] as String? ?? '';
+        String callerName2 = args2?['callerName'] as String? ?? 'Unknown';
+        String callerNumber2 = args2?['callerNumber'] as String? ?? '';
+        String callId2 = args2?['callId'] as String? ?? uuid2;
+
+        // Fallback: reload SharedPreferences (covers cases where args are empty,
+        // e.g., older CallManager builds or if cleanupCall already wiped UserDefaults).
+        if (sessionStr2.isEmpty) {
+          final prefs2 = await SharedPreferences.getInstance();
+          await prefs2.reload();
+          sessionStr2 = prefs2.getString('pending_call_session') ?? '';
+          if (callerName2 == 'Unknown') callerName2 = prefs2.getString('pending_caller_name') ?? 'Unknown';
+          if (callerNumber2.isEmpty) callerNumber2 = prefs2.getString('pending_caller_number') ?? '';
+          if (callId2 == uuid2) callId2 = prefs2.getString('pending_call_id') ?? uuid2;
+        }
 
         if (sessionStr2.isEmpty) {
+          // SharedPreferences may have been cleared by _checkInitialCall's
+          // initializeCallListener() call (which runs cleanupCall and wipes prefs)
+          // before the user finishes answering. Fall back to the in-memory service
+          // state that _checkInitialCall already populated via setPendingCall().
+          final svcEarly = GlobalCallListenerService.instance.service;
+          if (svcEarly != null && svcEarly.hasActivePendingCall) {
+            debugPrint('🔄 onNativeCallAnswered: prefs cleared, falling back to in-memory service state');
+            final nameForNav = svcEarly.currentCallerName ?? 'Unknown';
+            final numberForNav = svcEarly.currentPhoneNumber ?? '';
+            final userIdNav = await getUserId();
+            final adminIdNav = await getAdminId();
+            final apiKeyNav = await getBusinessApiKey();
+            final avatarNav =
+                'https://ui-avatars.com/api/?name=${Uri.encodeComponent(nameForNav)}&background=075E54&color=fff&size=200&rounded=true';
+            storePendingNavigation({
+              'userId': userIdNav,
+              'adminId': adminIdNav,
+              'apiKey': apiKeyNav,
+              'callerNumber': numberForNav,
+              'callerName': nameForNav,
+              'avatar': avatarNav,
+            });
+            await handlePendingCallNavigation();
+            break;
+          }
           debugPrint('❌ Session missing for answer');
           break;
         }
@@ -236,9 +290,7 @@ class WhatsAppCallingConfig {
           'avatar': avatar,
         });
 
-        if (isAppInForeground) {
-          await handlePendingCallNavigation();
-        }
+        await handlePendingCallNavigation();
         break;
 
       case 'onCallEndedNatively':
