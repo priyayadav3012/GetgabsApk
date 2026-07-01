@@ -265,6 +265,8 @@ class DashboardController extends GetxController {
 
   Future<void> activeChatListApi({String increment = 'add'}) async {
     debugPrint('Active Chat List API called with increment: $increment');
+    if (isApiCallInProgress.value) return;
+    isApiCallInProgress.value = true;
     isChatPageLoading.value = true;
 
     try {
@@ -288,7 +290,6 @@ class DashboardController extends GetxController {
         "X-Client-GetGabs": apiKey.toString(),
         "Content-Type": "application/json"
       };
-      if (isApiCallInProgress.value) return;
 
       chatServices.activeChatList(data, headers: headers).then((value) {
         if (value['status']) {
