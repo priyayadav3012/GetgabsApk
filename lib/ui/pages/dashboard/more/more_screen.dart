@@ -24,16 +24,19 @@ class _C {
   /// Evaluates whether the current active app compilation targets 'messagedly'
   static bool get isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
 
+  /// Evaluates whether the current active app compilation targets 'scalewiz'
+  static bool get isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+
   // Constant global canvas deep background color setup
   static const bg        = Color(0xFF0A0F0D);
-  
+
   // Custom theme properties switching on the basis of active target flavor configuration
-  static Color get card      => isMessagedly ? const Color(0xFF13111C) : const Color(0xFF162019);
-  static Color get green     => isMessagedly ? const Color.fromARGB(255, 150, 107, 219) : const Color(0xFF25D366);
-  static Color get greenDark => isMessagedly ? const Color.fromARGB(255, 125, 139, 216) : const Color(0xFF128C7E);
-  static Color get border    => isMessagedly ? const Color.fromARGB(33, 164, 135, 245) : const Color(0x2225D366);
-  static Color get text      => isMessagedly ? const Color.fromARGB(255, 229, 231, 248) : const Color(0xFFF0FAF4);
-  static Color get muted     => isMessagedly ? const Color.fromARGB(255, 164, 135, 245) : const Color(0xFF6B8F79);
+  static Color get card      => isMessagedly ? const Color(0xFF13111C) : isScalewiz ? const Color(0xFF0F1E1C) : const Color(0xFF162019);
+  static Color get green     => isMessagedly ? const Color.fromARGB(255, 150, 107, 219) : isScalewiz ? const Color(0xff17A398) : const Color(0xFF25D366);
+  static Color get greenDark => isMessagedly ? const Color.fromARGB(255, 125, 139, 216) : isScalewiz ? const Color(0xff0E7C74) : const Color(0xFF128C7E);
+  static Color get border    => isMessagedly ? const Color.fromARGB(33, 164, 135, 245) : isScalewiz ? const Color(0x2217A398) : const Color(0x2225D366);
+  static Color get text      => isMessagedly ? const Color.fromARGB(255, 229, 231, 248) : isScalewiz ? const Color(0xFFE9F7F4) : const Color(0xFFF0FAF4);
+  static Color get muted     => isMessagedly ? const Color.fromARGB(255, 164, 135, 245) : isScalewiz ? const Color(0xff5FA79D) : const Color(0xFF6B8F79);
   
   // Destructive alert or global warning visual layout configuration color
   static const red       = Color(0xFFFF5A5A);

@@ -234,6 +234,9 @@ class LoginWithEmailController extends GetxController
     if (currentFlavor == 'messagedly') {
       data['white_label'] = 'true';
       print('🎯 Flavor: Messagedly — white_label=true');
+    } else if (currentFlavor == 'scalewiz') {
+      data['white_label'] = 'true';
+      print('🎯 Flavor: Scalewiz — white_label=true');
     } else {
       print('🎯 Flavor: GetGabs');
     }

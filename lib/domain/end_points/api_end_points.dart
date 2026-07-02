@@ -23,10 +23,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 class ApiEndPoints {
   static const String baseUrl = 'https://app.getgabs.com/v2/flutterapplication/';
+  static const String _scalewizLoginBaseUrl = 'https://app.getgabs.com/v3/flutterapplication/';
   static _AuthEndPoints authEndpoints = _AuthEndPoints();
   static _DashboardEndPoints dashboardEndPoints = _DashboardEndPoints();
   static _ChatEndPoints chatEndPoints = _ChatEndPoints();
   static _MoreScreenEndPoints moreScreenEndPoints = _MoreScreenEndPoints();
+
+  // ✅ Scalewiz ka login endpoint v3 pe hai, baaki sab endpoints v2 pe hi rahenge
+  static String get loginBaseUrl =>
+      LoginWithEmailController.currentFlavor == 'scalewiz'
+          ? _scalewizLoginBaseUrl
+          : baseUrl;
 }
 
 class _AuthEndPoints {
@@ -98,6 +105,10 @@ class WhatsAppCallingConfig {
   // ============================================
   static bool _checkIsMessagedly() {
     return LoginWithEmailController.currentFlavor == 'messagedly';
+  }
+
+  static bool _checkIsScalewiz() {
+    return LoginWithEmailController.currentFlavor == 'scalewiz';
   }
 
   // ============================================
@@ -555,7 +566,11 @@ class WhatsAppCallingConfig {
             ? callerName
             : callerNumber.replaceAll('+', '').replaceAll(' ', '');
 
-        final String avatarBgColor = _checkIsMessagedly() ? '4242D4' : '075E54';
+        final String avatarBgColor = _checkIsMessagedly()
+            ? '4242D4'
+            : _checkIsScalewiz()
+                ? '0E7C74'
+                : '075E54';
         final avatar =
             'https://ui-avatars.com/api/?name=${Uri.encodeComponent(displayForAvatar)}&background=$avatarBgColor&color=fff&size=200&rounded=true&bold=true';
 
@@ -732,7 +747,9 @@ class WhatsAppCallingConfig {
     try {
       final Color loaderColor = _checkIsMessagedly()
           ? const Color(0xff4242D4)
-          : const Color(0xFF00A884);
+          : _checkIsScalewiz()
+              ? const Color(0xff0E7C74)
+              : const Color(0xFF00A884);
 
       Get.dialog(
         Center(child: CircularProgressIndicator(color: loaderColor)),
@@ -875,11 +892,22 @@ class WhatsAppCallingConfig {
   static void showCallOptions(
       BuildContext context, String phoneNumber, String contactName) {
     final bool isMessagedly = _checkIsMessagedly();
-    final String callOptionTitle =
-        isMessagedly ? 'Messagedly Voice Call' : 'GetGabs Voice Call';
-    final Color dynamicBrandColor =
-        isMessagedly ? const Color(0xff4242D4) : const Color(0xFF00A884);
-    final String avatarBgHex = isMessagedly ? '4242D4' : '075E54';
+    final bool isScalewiz = _checkIsScalewiz();
+    final String callOptionTitle = isMessagedly
+        ? 'Messagedly Voice Call'
+        : isScalewiz
+            ? 'Scalewiz Voice Call'
+            : 'GetGabs Voice Call';
+    final Color dynamicBrandColor = isMessagedly
+        ? const Color(0xff4242D4)
+        : isScalewiz
+            ? const Color(0xff0E7C74)
+            : const Color(0xFF00A884);
+    final String avatarBgHex = isMessagedly
+        ? '4242D4'
+        : isScalewiz
+            ? '0E7C74'
+            : '075E54';
 
     Get.bottomSheet(
       SafeArea(

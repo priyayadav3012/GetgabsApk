@@ -7,21 +7,21 @@ class ImageAssets {
   //-------------------------- Dynamic Logos (Jo Flavor ke hisab se badlenge) ---------------------------------
   
   static String get getGabsLogoSvg {
-    return currentFlavor == 'messagedly'
-        ? 'assets/images/messagedly_logo.png' // 🟧 Messagedly ka SVG Logo path
-        : 'assets/images/getgabslogo.svg';    // 🟦 GetGabs ka SVG Logo path
+    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka SVG Logo path
+    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
+    return 'assets/images/getgabslogo.svg';                                       // 🟦 GetGabs ka SVG Logo path
   }
 
   static String get getGabsLogoPng {
-    return currentFlavor == 'messagedly'
-        ? 'assets/images/messagedly_logo.png' // 🟧 Messagedly ka PNG Logo path
-        : 'assets/images/get_gabs_logo.png';  // 🟦 GetGabs ka PNG Logo path
+    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka PNG Logo path
+    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
+    return 'assets/images/get_gabs_logo.png';                                     // 🟦 GetGabs ka PNG Logo path
   }
 
   static String get getgabsLogoPng {
-    return currentFlavor == 'messagedly'
-        ? 'assets/images/messagedly_logo.png' // 🟧 Messagedly ka dusra PNG Logo path (Splash ke liye jo use ho raha tha)
-        : 'assets/images/gglogo.png';          // 🟦 GetGabs ka dusra PNG Logo path
+    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka dusra PNG Logo path (Splash ke liye jo use ho raha tha)
+    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka dusra Logo path
+    return 'assets/images/gglogo.png';                                           // 🟦 GetGabs ka dusra PNG Logo path
   }
 
   //-------------------------- Common SVG Images (Jo dono apps mein same hain) ---------------------------------
