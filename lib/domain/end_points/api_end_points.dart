@@ -519,12 +519,12 @@ class WhatsAppCallingConfig {
 
       // ✅ v3.0.0 — sealed class pattern use karo (Event enum gone)
       if (event is CallEventActionCallAccept) {
-        final callId = event.id;
+        // final callId = event.id;
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
         final callerName = prefs.getString('pending_caller_name') ?? '';
         final callerNumber = prefs.getString('pending_caller_number') ?? '';
-        final savedCallId = prefs.getString('pending_call_id') ?? callId;
+        // final savedCallId = prefs.getString('pending_call_id') ?? callId;
 
         debugPrint('📞 Accept — session empty: ${sessionStr.isEmpty} | number: $callerNumber');
 
@@ -562,7 +562,7 @@ class WhatsAppCallingConfig {
         await initializeCallListener();
         final service = GlobalCallListenerService.instance.service;
         if (service != null) {
-          service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
+          // service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
           service.currentPhoneNumber = callerNumber;
           service.currentCallerName = callerName;
           service.isOutgoingCall = false;
@@ -599,19 +599,19 @@ class WhatsAppCallingConfig {
 
       } else if (event is CallEventActionCallDecline) {
         debugPrint('📵 Call declined from CallKit');
-        final callId = event.id;
+        // final callId = event.id;
         final prefs2 = await SharedPreferences.getInstance();
-        final declineCallId = prefs2.getString('pending_call_id') ?? callId;
+        // final declineCallId = prefs2.getString('pending_call_id') ?? callId;
         await _clearCallPrefs(prefs2);
 
         final svc = GlobalCallListenerService.instance.service;
-        if (svc != null && declineCallId.isNotEmpty) {
-          await svc.terminateCall();
-        } else {
-          await _terminateCallViaHttp(declineCallId);
-        }
+        // if (svc != null && declineCallId.isNotEmpty) {
+        //   await svc.terminateCall();
+        // } else {
+        //   await _terminateCallViaHttp(declineCallId);
+        // }
 
-        try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
+        // try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
 
       } else if (event is CallEventActionCallTimeout) {
         debugPrint('⏰ Call timeout');
