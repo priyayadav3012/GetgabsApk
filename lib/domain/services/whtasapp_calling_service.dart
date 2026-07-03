@@ -17,7 +17,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide navigator;
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
-import 'package:getgabs/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'package:http/http.dart' as http;
@@ -59,6 +58,14 @@ class WhatsAppCallingService {
   // never establish a peer connection even though SDP exchange succeeded via HTTP.
   final List<Map<String, dynamic>> _bufferedIceCandidates = [];
 
+  // Buffer for REMOTE ICE candidates (from caller) that arrive via socket BEFORE
+  // _createPeerConnection() runs. On first call, the socket may already be delivering
+  // 'ice_candidate' events while peerConnection is still null; if we drop them here
+  // the callee never learns the caller's ICE addresses and ICE never completes.
+  // Drained in answerCall() after setRemoteDescription() so the peer connection is
+  // ready to accept them. Cleared in cleanupCall() for next call.
+  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
+
   // ✅ iOS ke liye valid UUID store karna zaroori hai
   String? currentCallKitId;
 
@@ -85,6 +92,7 @@ class WhatsAppCallingService {
   bool _hasActivePendingCall = false;
 
   DateTime? callStartTime;
+  bool _callStartLogged = false;
   String? currentPhoneNumber;
   String? currentCallerName;
   bool isOutgoingCall = false;
@@ -149,6 +157,8 @@ class WhatsAppCallingService {
     _pendingSdp = null;
     _pendingCallId = null;
     _hasActivePendingCall = false;
+    _bufferedIceCandidates.clear();
+    _pendingRemoteCandidates.clear();
   }
 
   void _cancelCallTimeout() {
@@ -378,7 +388,6 @@ class WhatsAppCallingService {
     socket!.on('call_accepted', (data) async {
       _cancelCallTimeout();
       _isCallActive = true;
-      callStartTime = DateTime.now();
       _updateStatus('Connected');
       if (peerConnection != null && data['sdp'] != null) {
         try {
@@ -389,7 +398,8 @@ class WhatsAppCallingService {
           }
         } catch (e) {}
       }
-      await _logCallStart();
+      // callStartTime and _logCallStart() fire in onIceConnectionState (Connected)
+      // to avoid logging twice — once here and once when ICE confirms media flow.
     });
 
     socket!.on('sdp_answer', (data) async {
@@ -403,14 +413,25 @@ class WhatsAppCallingService {
     });
 
     socket!.on('ice_candidate', (data) async {
-      if (peerConnection != null && data['candidate'] != null) {
+      final c = data['candidate'];
+      if (c == null) return;
+      final candidate = RTCIceCandidate(
+        c['candidate'],
+        c['sdpMid'],
+        c['sdpMLineIndex'],
+      );
+      if (peerConnection != null) {
         try {
-          await peerConnection!.addCandidate(RTCIceCandidate(
-            data['candidate']['candidate'],
-            data['candidate']['sdpMid'],
-            data['candidate']['sdpMLineIndex'],
-          ));
+          await peerConnection!.addCandidate(candidate);
         } catch (e) {}
+      } else {
+        // peerConnection doesn't exist yet — buffer and drain in answerCall()
+        // after setRemoteDescription(). Dropping here was the root cause of
+        // first-call failure: the caller sends candidates while the callee is
+        // still setting up (socket arrives before _createPeerConnection runs).
+        _pendingRemoteCandidates.add(candidate);
+        debugPrint(
+            '📦 Remote ICE buffered (no peer connection yet): ${_pendingRemoteCandidates.length}');
       }
     });
 
@@ -489,8 +510,7 @@ class WhatsAppCallingService {
     socket!.onConnect((_) {
       debugPrint('✅ Socket connected: ${socket?.id}');
       if (!_isCallActive) _updateStatus('Connected - Ready to call');
-      // #changedWithJClaude — flush any ICE candidates that were generated while the
-      // socket was still reconnecting after a background→foreground transition.
+      // Flush ICE candidates buffered during socket reconnect.
       if (_bufferedIceCandidates.isNotEmpty) {
         debugPrint(
             '🚀 Flushing ${_bufferedIceCandidates.length} buffered ICE candidates');
@@ -498,6 +518,14 @@ class WhatsAppCallingService {
           socket!.emit('ice_candidate', payload);
         }
         _bufferedIceCandidates.clear();
+      }
+      // Restart the ringing timeout if the socket dropped and reconnected while
+      // an outgoing call is still waiting for an answer. The server may not replay
+      // call_no_answer/call_timeout after a reconnect, so the caller would be
+      // stuck in "Ringing..." indefinitely without a fresh timer.
+      if (isOutgoingCall && _isCallActive && !_callStartLogged && _callTimeoutTimer == null) {
+        debugPrint('⏱️ Restarting call timeout after socket reconnect');
+        _startCallTimeout();
       }
     });
 
@@ -545,10 +573,12 @@ class WhatsAppCallingService {
       await prefs.setString('pending_callkit_id', callKitId);
       await prefs.setString('pending_caller_name', callerName);
       await prefs.setString('pending_caller_number', callerNumber);
-      await prefs.setString(
-        'pending_call_session',
-        jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}),
-      );
+      if (sdpOffer.isNotEmpty) {
+        await prefs.setString(
+          'pending_call_session',
+          jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}),
+        );
+      }
 
       String displayName = callerName.isNotEmpty ? callerName : callerNumber;
       String displayNameShort = displayName.length > 25
@@ -685,6 +715,10 @@ class WhatsAppCallingService {
   }
 
   bool _isCleaningUp = false;
+  // Exposed so the foreground-resume active-call recovery in main.dart can skip
+  // re-pushing the call screen during the multi-second teardown window, where
+  // _isCallActive still reads true but the call is actually ending.
+  bool get isCleaningUp => _isCleaningUp;
 
   Future<void> _handleCallEnded(String reason) async {
     if (_isCleaningUp) return;
@@ -747,7 +781,9 @@ class WhatsAppCallingService {
     debugPrint('🧹 Starting Full Cleanup...');
     _isCallActive = false;
     _callKitShowing = false;
+    _callStartLogged = false;
     _cancelCallTimeout();
+    _clearPendingState();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -789,7 +825,6 @@ class WhatsAppCallingService {
     currentCallerName = null;
     isOutgoingCall = false;
     _callAccepted = false;
-    _bufferedIceCandidates.clear();
     onStatusChange = null;
     onRemoteStream = null;
     onCallEnded = null;
@@ -826,6 +861,7 @@ class WhatsAppCallingService {
       await peerConnection?.dispose();
     } catch (e) {}
 
+    peerConnection = null;
     peerConnection = await createPeerConnection(iceServers);
 
     peerConnection!.onTrack = (event) {
@@ -874,19 +910,54 @@ class WhatsAppCallingService {
     };
 
     peerConnection!.onIceConnectionState = (state) {
-      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      debugPrint('🧊 ICE state → $state');
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         _cancelCallTimeout();
-        _updateStatus('Accepted');
+        if (!_callStartLogged) {
+          _callStartLogged = true;
+          callStartTime = DateTime.now();
+          _logCallStart();
+        }
+        _updateStatus('Connected');
         _isCallActive = true;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        // Temporary loss (background/network blip). Do NOT end the call —
+        // WebRTC will attempt ICE restart automatically. Surface a status
+        // update so the UI shows "Reconnecting..." rather than freezing silently.
+        _updateStatus('Reconnecting...');
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         _cancelCallTimeout();
         onError?.call('Connection failed');
         _handleCallEnded('Connection failed');
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
+        _handleCallEnded('Call ended');
       }
     };
   }
 
+  // Serializes concurrent answer attempts. onNativeCallAnswered answers the
+  // call directly in the background (locked-phone CallKit accept), while
+  // WhatsAppCallingScreen._initCall may call answerCall() again once the app
+  // foregrounds. Both can pass the _callAccepted guard because that flag is
+  // only set after the async _requestPermissions() — without this in-flight
+  // flag two peer connections could be created for the same call.
+  bool _answerCallInProgress = false;
+
   Future<void> answerCall() async {
+    if (_answerCallInProgress) {
+      debugPrint('⚠️ answerCall already in progress — skipping duplicate');
+      return;
+    }
+    _answerCallInProgress = true;
+    try {
+      await _answerCallInternal();
+    } finally {
+      _answerCallInProgress = false;
+    }
+  }
+
+  Future<void> _answerCallInternal() async {
     print("call_answerrrrrrrrrrrrrrrrrrrrrrrrrrrrr");
 
     if (_callAccepted) {
@@ -907,6 +978,10 @@ class WhatsAppCallingService {
     String safeSdp = _pendingSdp!;
     String safeCallId = _pendingCallId!;
 
+    // Request permissions BEFORE marking call accepted — if denied the flags
+    // stay false and the service is still clean (no cleanupCall needed).
+    await _requestPermissions();
+
     incomingSdp = safeSdp;
     currentCallId = safeCallId;
     _isCallActive = true;
@@ -926,7 +1001,6 @@ class WhatsAppCallingService {
       }
     }
 
-    await _requestPermissions();
     await _createPeerConnection();
 
     localStream = await webrtc.navigator.mediaDevices.getUserMedia({
@@ -944,6 +1018,21 @@ class WhatsAppCallingService {
 
     await peerConnection!
         .setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
+
+    // Drain remote ICE candidates that arrived before _createPeerConnection ran.
+    // These were buffered in the 'ice_candidate' socket handler to avoid the
+    // first-call failure where candidates arrived before peerConnection existed.
+    if (_pendingRemoteCandidates.isNotEmpty) {
+      debugPrint(
+          '🚀 Draining ${_pendingRemoteCandidates.length} buffered remote ICE candidates');
+      for (final c in _pendingRemoteCandidates) {
+        try {
+          await peerConnection!.addCandidate(c);
+        } catch (e) {}
+      }
+      _pendingRemoteCandidates.clear();
+    }
+
     RTCSessionDescription answer = await peerConnection!.createAnswer();
     await peerConnection!.setLocalDescription(answer);
 
@@ -961,17 +1050,17 @@ class WhatsAppCallingService {
         .timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
+      String message = 'Failed to answer call (${response.statusCode})';
       try {
-        final errorBody = jsonDecode(response.body);
-        throw Exception(errorBody['error'] ?? errorBody['message'] ?? 'Failed to answer call (${response.statusCode})');
-      } catch (_) {
-        throw Exception('Failed to answer call (${response.statusCode})');
-      }
+        final errorBody = jsonDecode(response.body) as Map<String, dynamic>;
+        message = (errorBody['error'] ?? errorBody['message'] ?? message).toString();
+      } catch (_) {}
+      throw Exception(message);
     }
 
-    _updateStatus('Connected');
-    callStartTime = DateTime.now();
-    await _logCallStart();
+    // HTTP handshake done — ICE negotiation starts now. Timer and 'Connected'
+    // status fire in onIceConnectionState when ICE actually reaches Connected.
+    _updateStatus('Accepted');
   }
 
   Future<void> makeCall(String phoneNumber) async {
@@ -1006,57 +1095,61 @@ class WhatsAppCallingService {
     _updateStatus('Calling...');
     _startCallTimeout();
 
-    localStream = await webrtc.navigator.mediaDevices.getUserMedia({
-      'audio': {
-        'echoCancellation': true,
-        'noiseSuppression': true,
-        'autoGainControl': true
-      },
-      'video': false,
-    }).timeout(const Duration(seconds: 10));
+    // Everything past this point can throw (getUserMedia timeout, createOffer,
+    // HTTP). Cancel the ringing timer on any failure so it does not leak — the
+    // caller's cleanupCall() also runs, but this keeps makeCall self-contained.
+    try {
+      localStream = await webrtc.navigator.mediaDevices.getUserMedia({
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true
+        },
+        'video': false,
+      }).timeout(const Duration(seconds: 10));
 
-    for (var track in localStream!.getTracks()) {
-      peerConnection!.addTrack(track, localStream!);
-    }
+      for (var track in localStream!.getTracks()) {
+        peerConnection!.addTrack(track, localStream!);
+      }
 
-    RTCSessionDescription offer = await peerConnection!.createOffer(
-        {'offerToReceiveAudio': true, 'offerToReceiveVideo': false});
-    await peerConnection!.setLocalDescription(offer);
+      RTCSessionDescription offer = await peerConnection!.createOffer(
+          {'offerToReceiveAudio': true, 'offerToReceiveVideo': false});
+      await peerConnection!.setLocalDescription(offer);
 
-    await Future.delayed(const Duration(seconds: 2));
+      RTCSessionDescription? localDesc =
+          await peerConnection!.getLocalDescription();
+      String sdpOffer = localDesc?.sdp ?? offer.sdp ?? '';
 
-    RTCSessionDescription? localDesc =
-        await peerConnection!.getLocalDescription();
-    String sdpOffer = localDesc?.sdp ?? offer.sdp ?? '';
+      if (sdpOffer.isEmpty) {
+        throw Exception('Failed to create SDP offer');
+      }
 
-    if (sdpOffer.isEmpty) {
+      final response = await http
+          .post(
+            Uri.parse('$socketUrl/start-outbound-call'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'to': formattedPhone,
+              'sdpOffer': sdpOffer,
+              'callerId': userId,
+              'adminId': adminId,
+              'api_key': businessApiKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode != 200) {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to start call');
+      }
+
+      final data = jsonDecode(response.body);
+      currentCallId = data['callId'];
+      _updateStatus('Ringing...');
+    } catch (e) {
       _cancelCallTimeout();
-      throw Exception('Failed to create SDP offer');
+      rethrow;
     }
-
-    final response = await http
-        .post(
-          Uri.parse('$socketUrl/start-outbound-call'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'to': formattedPhone,
-            'sdpOffer': sdpOffer,
-            'callerId': userId,
-            'adminId': adminId,
-            'api_key': businessApiKey,
-          }),
-        )
-        .timeout(const Duration(seconds: 20));
-
-    if (response.statusCode != 200) {
-      _cancelCallTimeout();
-      final error = jsonDecode(response.body);
-      throw Exception(error['error'] ?? 'Failed to start call');
-    }
-
-    final data = jsonDecode(response.body);
-    currentCallId = data['callId'];
-    _updateStatus('Ringing...');
   }
 
   Future<void> terminateCall() async {
@@ -1073,12 +1166,14 @@ class WhatsAppCallingService {
 
       if (backendCallId != null && backendCallId.isNotEmpty) {
         try {
-          await http.post(
-            Uri.parse('$socketUrl/terminate-whatsapp-call'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(
-                {'callId': backendCallId, 'api_key': businessApiKey}),
-          );
+          await http
+              .post(
+                Uri.parse('$socketUrl/terminate-whatsapp-call'),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(
+                    {'callId': backendCallId, 'api_key': businessApiKey}),
+              )
+              .timeout(const Duration(seconds: 8));
         } catch (e) {
           debugPrint('❌ terminate api error: $e');
         }
@@ -1102,7 +1197,12 @@ class WhatsAppCallingService {
       }
 
       await stopRingtone();
+      // Capture before cleanupCall() nulls all callbacks.
+      // This covers every caller of terminateCall() (CallKit event stream,
+      // ICE failed, HTTP error) — not just the onCallEndedNatively path.
+      final callEndedCb = onCallEnded;
       await cleanupCall();
+      callEndedCb?.call();
     } finally {
       _isCleaningUp = false;
     }
@@ -1395,7 +1495,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     // ✅ Android: direct answerCall
     if (Platform.isIOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground && !widget.callingService.callAccepted) {
+        if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+            !widget.callingService.callAccepted) {
           await _answerCall();
         }
       });
@@ -1489,6 +1590,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       }
       await widget.callingService.answerCall();
     } catch (e) {
+      // cleanupCall() resets _callAccepted/_isCallActive so the next
+      // incoming call is not permanently blocked by stale true-flags.
+      await widget.callingService.cleanupCall();
       _handleCallEnded('Failed to connect');
     }
   }
@@ -1510,6 +1614,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void dispose() {
+    WhatsAppCallingConfig.notifyCallScreenClosed();
     _waveController.dispose();
     _timer?.cancel();
     widget.callingService.onStatusChange = null;
@@ -1804,7 +1909,6 @@ class GlobalCallListenerService {
   GlobalCallListenerService._();
 
   WhatsAppCallingService? _service;
-  bool _callScreenOpen = false;
   bool _isInitialized = false;
   bool _isInitializing = false;
   Map<String, dynamic>? pendingCall;
@@ -1819,11 +1923,11 @@ class GlobalCallListenerService {
     required String sdp,
     required String callId,
   }) {
-    if (_callScreenOpen) {
+    if (WhatsAppCallingConfig.isCallScreenOpen) {
       debugPrint('⚠️ Call screen already opened');
       return;
     }
-    _callScreenOpen = true;
+    WhatsAppCallingConfig.notifyCallScreenOpened();
     Get.to(
       () => IncomingCallScreen(
         callingService: service,
@@ -1833,7 +1937,7 @@ class GlobalCallListenerService {
         pendingCallId: callId,
       ),
       transition: Transition.fadeIn,
-    )?.then((_) => _callScreenOpen = false);
+    )?.then((_) => WhatsAppCallingConfig.notifyCallScreenClosed());
   }
 
   // #changedWithJClaude — Bug 5: guard against service teardown while a call is pending/active.
@@ -1897,9 +2001,21 @@ class GlobalCallListenerService {
       _service!.isGlobalListener = true;
       await _service!.initialize();
 
+      // Mark initialized BEFORE the iOS-only early return so Android callers
+      // see isInitialized=true and the guard at line 1927 prevents unnecessary
+      // service teardowns on subsequent initialize() calls.
+      _isInitialized = true;
+
       // ============================================
       // CALLKIT EVENT LISTENER
       // ============================================
+      // On Android, setupCallKitEvents() in api_end_points.dart already handles
+      // all FlutterCallkitIncoming events. Registering a second listener here
+      // would cause CallEventActionCallAccept to be processed twice concurrently,
+      // creating a race where the first handler may clear SharedPreferences before
+      // the second reads them, resulting in empty callId/sdp for setPendingCall().
+      if (!Platform.isIOS) return;
+
       _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
         debugPrint('📞 CallKit EVENT: $event');
 
@@ -1925,9 +2041,9 @@ class GlobalCallListenerService {
           }
 
           // ✅ FOREGROUND
-          if (isAppInForeground) {
+          if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
             debugPrint('🟢 FOREGROUND FLOW');
-            if (_callScreenOpen) {
+            if (WhatsAppCallingConfig.isCallScreenOpen) {
               debugPrint('⚠️ Screen already open');
               return;
             }

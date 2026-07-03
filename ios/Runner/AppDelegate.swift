@@ -262,6 +262,10 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
         if !sessionRaw.isEmpty {
             defaults.set(sessionRaw, forKey: "flutter.pending_call_session")
         }
+        // Force flush to disk before the process can be suspended under memory pressure.
+        // Without this, Flutter's SharedPreferences.reload() may see stale empty values
+        // because the in-memory UserDefaults cache hasn't been persisted yet.
+        defaults.synchronize()
         print("📦 Call metadata written to NSUserDefaults for killed-state recovery")
 
         guard let uuid = UUID(uuidString: uuidString) else {
@@ -321,6 +325,9 @@ private func normalizeCallKitUUID(_ raw: String?) -> String {
                 self.currentCallUUID = nil
             }
             self.isCallActive = false
+            // Clear pendingAnsweredCallUUID so any still-running tryNotifyFlutter
+            // retries stop and do not send onNativeCallAnswered for a dead call.
+            self.pendingAnsweredCallUUID = nil
             callChannel?.invokeMethod("onCallEndedNatively", arguments: ["uuid": uuidStr.lowercased()])
         }
     }
