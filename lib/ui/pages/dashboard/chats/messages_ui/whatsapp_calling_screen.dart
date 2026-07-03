@@ -9,7 +9,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
-import 'package:getgabs/main.dart' show isAppInForeground;
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -80,11 +79,16 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     // has time to set RTCAudioSession.isAudioEnabled = true before getUserMedia()
     // is called. Without this, audio never starts and the call drops immediately.
     // If the screen opens while still in background (killed-state pre-launch),
-    // isAppInForeground is false and _initCall is skipped here — it will fire
-    // from didChangeAppLifecycleState when the app transitions to resumed.
+    // The lifecycle state may not be 'resumed' (e.g. background, inactive), and
+    // _initCall is skipped here — it will fire from didChangeAppLifecycleState
+    // when the app transitions to resumed.
     if (Platform.isIOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground) {
+        // Guard with _initCallDone: didChangeAppLifecycleState(resumed) can fire
+        // between addObserver(this) and this callback if the lifecycle transition
+        // happens mid-frame, causing both paths to call _initCall() concurrently.
+        if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+            !_initCallDone) {
           _initCallDone = true;
           await _initCall();
         }
@@ -192,6 +196,24 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     // ✅ Step 4: Incoming ya Outgoing
     if (widget.isIncoming) {
       setState(() => _status = 'Connecting...');
+
+      // Locked-phone path: onNativeCallAnswered answers the call directly in
+      // the background (no frames are pumped while locked, so this screen only
+      // builds after unlock — by then the call is already live). Don't run the
+      // answer flow again; just sync the UI from the service's current state.
+      // Subsequent status changes still arrive via onStatusChange (attached above).
+      if (_callingService!.callAccepted) {
+        debugPrint('✅ Call already answered natively — syncing UI to live call');
+        if (_callingService!.callStatus.toLowerCase().contains('connected')) {
+          setState(() {
+            _isConnected = true;
+            _status = 'Connected';
+          });
+          _startTimer();
+        }
+        return;
+      }
+
       try {
         // #changedWithJClaude — explicitly reconnect socket before answerCall().
         // After a background→foreground transition the socket is often disconnected.
@@ -254,6 +276,12 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
         }
       } catch (e) {
         debugPrint('❌ answerCall error: $e');
+        // cleanupCall() resets _callAccepted and _isCallActive so the next
+        // incoming call is not blocked by stale true-flags in the global service.
+        // Without this, dispose() only nulls callbacks (external service path)
+        // and _callAccepted stays true, causing the socket guard and answerCall()
+        // guard to silently discard the next call.
+        await _callingService?.cleanupCall();
         _handleCallEnded(e.toString().replaceAll('Exception: ', ''));
       }
     } else if (widget.initialPhoneNumber.isNotEmpty) {
@@ -269,6 +297,9 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
         }
         await _callingService!.makeCall(widget.initialPhoneNumber);
       } catch (e) {
+        // cleanupCall() resets _callAccepted/_isCallActive so the next call
+        // is not blocked by stale flags left behind by a failed makeCall().
+        await _callingService?.cleanupCall();
         _handleCallEnded(e.toString().replaceAll('Exception: ', ''));
       }
     }
@@ -388,6 +419,19 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
       _callingService?.onStatusChange = null;
       _callingService?.onCallEnded = null;
       _callingService?.onError = null;
+
+      // This screen is being destroyed while its call is still live —
+      // e.g. the splash's Get.offAllNamed(dashboard) wiped the navigation
+      // stack during a killed-state launch, or a logout redirect cleared it.
+      // The call survives on the global service (only callbacks were
+      // detached above), so schedule a restore. _isEnded is true on every
+      // normal call-end path, making this a no-op there. This complements
+      // the routingCallback trigger, which can fire before this dispose has
+      // released _callScreenOpen.
+      if (!_isEnded && (_callingService?.callAccepted ?? false)) {
+        debugPrint('⚠️ Call screen disposed mid-call — scheduling restore');
+        WhatsAppCallingConfig.restoreCallScreenIfActive();
+      }
     } else {
       _callingService?.dispose();
     }

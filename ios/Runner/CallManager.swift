@@ -219,6 +219,18 @@ import WebRTC
 
     // MARK: - PROVIDER RESET
     public func providerDidReset(_ provider: CXProvider) {
+        // iOS resets the provider under memory pressure or after fatal CallKit
+        // errors. Post CALL_ENDED_NATIVE for every active call so AppDelegate
+        // clears isCallActive and Flutter receives the end signal — without this
+        // isCallActive stays true forever and all future VoIP pushes are silently
+        // discarded.
+        for uuid in activeCalls.keys {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("CALL_ENDED_NATIVE"),
+                object: nil,
+                userInfo: ["uuid": uuid.uuidString.lowercased()]
+            )
+        }
         activeCalls.removeAll()
         answeredCallUUIDs.removeAll()
         print("♻️ Provider reset")

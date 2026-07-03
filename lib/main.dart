@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
@@ -14,6 +15,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:getgabs/firebase_options.dart';
 import 'package:getgabs/routes/app_page.dart';
 import 'package:getgabs/ui/themes/themes.dart';
@@ -26,7 +28,6 @@ final RouteObserver<ModalRoute<void>> routeObserver =
 
 // ✅ Dono platforms ke liye global flags
 bool isAppInForeground = true;
-bool _isCallScreenOpen = false;
 
 // ============================================
 // LIFECYCLE OBSERVER
@@ -40,11 +41,42 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
     debugPrint(isAppInForeground ? '🟢 FOREGROUND' : '🔴 BACKGROUND');
 
     if (state == AppLifecycleState.resumed) {
-      // #changedWithJClaude — Bug 6: reduced from 800 ms to 100 ms so answerCall()
-      // reaches the server before the call times out on foreground resume.
       Future.delayed(const Duration(milliseconds: 100), () {
+        // Primary path: open pending incoming call screen (new call arriving).
         WhatsAppCallingConfig.handlePendingCallNavigation();
+
+        final svc = GlobalCallListenerService.instance.service;
+        // Gate on callAccepted (NOT isCallActive): an incoming call that is still
+        // ringing has isCallActive=true but callAccepted=false. Recovery re-pushes
+        // WhatsAppCallingScreen, whose _initCall auto-calls answerCall() when a
+        // pending call exists — so gating on isCallActive would auto-answer a
+        // ringing call just because the user opened the app. Only an already-
+        // answered, in-progress call needs its screen restored.
+        // Also gate on !isCleaningUp: during teardown callAccepted still reads
+        // true for a few seconds (HTTP terminate + native endCall run before
+        // cleanupCall clears it), which would re-push a screen for an ending call.
+        if (svc != null && svc.callAccepted && !svc.isCleaningUp) {
+          // Audio re-activation: restore WebRTC audio in case CXProvider
+          // didActivate didn't re-fire after a GSM interruption.
+          const MethodChannel('com.getgabs/calls')
+              .invokeMethod<void>('activateWebRTCAudio')
+              .catchError((e) {
+            debugPrint('⚠️ activateWebRTCAudio on resume error: $e');
+          });
+
+          // Active-call recovery: if an ongoing call exists but the call
+          // screen is no longer on the navigation stack (e.g. wiped by a
+          // stack-clearing navigation or lost under memory pressure),
+          // re-push it. Shares the guarded implementation with the
+          // routingCallback self-heal in GetMaterialApp.
+          WhatsAppCallingConfig.restoreCallScreenIfActive();
+        }
       });
+    } else if (state == AppLifecycleState.inactive) {
+      // GSM call arriving or multi-tasking swipe. Audio continuity is handled
+      // by CallManager.provider(_:didDeactivate:) setting isAudioEnabled=false.
+      // We log here for diagnostics and restore audio in the 'resumed' branch above.
+      debugPrint('⚠️ App inactive — possible audio interruption (GSM or backgrounding)');
     }
   }
 }
@@ -149,30 +181,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 // ============================================
-// OPEN CALL SCREEN (global helper)
-// ============================================
-void openCallScreen({
-  required WhatsAppCallingService service,
-  required String callerName,
-  required String callerNumber,
-  required String sdp,
-  required String callId,
-}) {
-  if (_isCallScreenOpen) return;
-  _isCallScreenOpen = true;
-
-  Get.to(
-    () => IncomingCallScreen(
-      callingService: service,
-      callerName: callerName,
-      callerNumber: callerNumber,
-      pendingSdp: sdp,
-      pendingCallId: callId,
-    ),
-  )?.then((_) => _isCallScreenOpen = false);
-}
-
-// ============================================
 // PREFS CLEANUP HELPER
 // ============================================
 Future<void> _clearCallPrefs(SharedPreferences prefs) async {
@@ -206,6 +214,11 @@ Future<void> _initGlobalCalling() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Request microphone permission immediately on first launch so the system
+  // dialog never appears mid-call-setup. On subsequent launches the OS returns
+  // instantly (permission already cached), so this adds negligible startup cost.
+  await Permission.microphone.request();
 
   // ✅ Lifecycle observer — dono platforms ke liye
   WidgetsBinding.instance.addObserver(AppLifecycleObserver());
@@ -267,7 +280,7 @@ class _MyAppState extends State<MyApp> {
   // ✅ App start pe pending call check karo
   // Background se accept karne ke baad app foreground aata hai — yahan handle karo
   Future<void> _checkInitialCall() async {
-    await Future.delayed(const Duration(milliseconds: 1500));
+    await Future.delayed(const Duration(milliseconds: 2500));
 
     final prefs = await SharedPreferences.getInstance();
     final callId = prefs.getString('pending_call_id');
@@ -356,9 +369,8 @@ class _MyAppState extends State<MyApp> {
 
     await Future.delayed(const Duration(milliseconds: 500));
 
-    if (!_isCallScreenOpen) {
-      WhatsAppCallingConfig.handlePendingCallNavigation();
-    }
+    // handlePendingCallNavigation guards itself with its own _callScreenOpen flag.
+    WhatsAppCallingConfig.handlePendingCallNavigation();
   }
 
   @override
@@ -377,6 +389,15 @@ class _MyAppState extends State<MyApp> {
       navigatorObservers: [routeObserver],
       getPages: AppPage.list,
       builder: EasyLoading.init(),
+      // Self-heal for the call screen: stack-wiping navigations (splash's
+      // Get.offAllNamed(dashboard) during a killed-state launch, logout
+      // redirects) destroy the call screen while the call keeps running in
+      // the global service. After every navigation settles, restore the
+      // screen if an accepted call has no screen. Guarded internally against
+      // ringing calls, teardown, and re-entrancy — a no-op in normal routing.
+      routingCallback: (routing) {
+        WhatsAppCallingConfig.restoreCallScreenIfActive();
+      },
       onReady: () {
         debugPrint('✅ App onReady');
         _initializeCallListener();

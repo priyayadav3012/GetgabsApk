@@ -15,7 +15,6 @@ import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
-import 'package:getgabs/main.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/whatsapp_calling_screen.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -68,8 +67,6 @@ class _MoreScreenEndPoints {
 // ============================================
 class WhatsAppCallingConfig {
   static final GetStorageUserData _userData = GetStorageUserData();
-  static const String businessApiKeyFallback =
-      'PKGEG8ggXzs6xjpIDqBxlwhjIGUuvYMjDG0s7Sp9NzVBOygFUCjPHdHn';
   static const String _socketUrl = 'https://calling.getgabs.com';
 
   // ✅ iOS ke liye MethodChannel — native CallKit answer handle karta hai
@@ -83,8 +80,61 @@ class WhatsAppCallingConfig {
   // WhatsAppCallingScreen.dispose() via notifyCallScreenClosed().
   static bool _callScreenOpen = false;
 
+  static bool get isCallScreenOpen => _callScreenOpen;
   static void notifyCallScreenOpened() => _callScreenOpen = true;
   static void notifyCallScreenClosed() => _callScreenOpen = false;
+
+  // ============================================
+  // CALL SCREEN SELF-HEAL
+  // Any stack-wiping navigation (splash's Get.offAllNamed(dashboard) ~6.5s
+  // after a killed-state launch, logout redirects, notification redirects)
+  // destroys the call screen while the call itself lives on in the global
+  // service (the screen's dispose only detaches callbacks). Called from
+  // GetMaterialApp.routingCallback after every navigation settles, and from
+  // the foreground-resume recovery, to re-push the screen for an accepted,
+  // still-active call.
+  // ============================================
+  static bool _restoreScheduled = false;
+
+  static void restoreCallScreenIfActive() {
+    if (_restoreScheduled) return;
+    final svc = GlobalCallListenerService.instance.service;
+    // callAccepted (not isCallActive): a ringing call must never be
+    // auto-answered by a restore. isCleaningUp: teardown keeps callAccepted
+    // true for a few seconds — do not restore a screen for an ending call.
+    //
+    // Do NOT check _callScreenOpen here: routingCallback fires DURING the
+    // stack-wiping navigation, before the wiped screen's dispose() has run
+    // and cleared the flag. Checking it at schedule time makes the restore
+    // bail exactly when it is needed. It is checked in the delayed closure
+    // below, after dispose has settled.
+    if (svc == null || !svc.callAccepted || svc.isCleaningUp) {
+      return;
+    }
+    _restoreScheduled = true;
+    // Delay so (a) the wiped screen's dispose() has run and released
+    // _callScreenOpen, and (b) we never push a route while the stack wipe
+    // itself is still mid-transition.
+    Future.delayed(const Duration(milliseconds: 400), () {
+      _restoreScheduled = false;
+      final s = GlobalCallListenerService.instance.service;
+      if (s == null || !s.callAccepted || s.isCleaningUp || _callScreenOpen) {
+        return;
+      }
+      debugPrint('🔄 Live call with no screen — restoring call screen');
+      final name = s.currentCallerName ?? 'Unknown';
+      storePendingNavigation({
+        'userId': s.userId,
+        'adminId': s.adminId,
+        'apiKey': s.businessApiKey,
+        'callerNumber': s.currentPhoneNumber ?? '',
+        'callerName': name,
+        'avatar':
+            'https://ui-avatars.com/api/?name=${Uri.encodeComponent(name)}&background=075E54&color=fff&size=200&rounded=true',
+      });
+      handlePendingCallNavigation();
+    });
+  }
 
   // Completer used to unblock onNativeCallAnswered when it fires before the
   // socket's whatsapp_call_incoming handler has written pending_call_session.
@@ -181,12 +231,25 @@ class WhatsAppCallingConfig {
         }
 
         final prefs = await SharedPreferences.getInstance();
+        // Reload to pick up NSUserDefaults writes from AppDelegate (VoIP push).
+        // Flutter's in-memory cache doesn't see native NSUserDefaults writes
+        // automatically — without reload the session read below can return stale empty.
+        await prefs.reload();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
         final callerNumber = prefs.getString('pending_caller_number') ?? '';
         final callId = prefs.getString('pending_call_id') ?? uuid;
 
         if (sessionStr.isEmpty) {
-          debugPrint('❌ Session missing');
+          // Session not yet available — socket may still be reconnecting.
+          // Kick the socket reconnect early so whatsapp_call_incoming arrives
+          // well before the user answers (giving the Completer in
+          // onNativeCallAnswered a better chance to succeed within 6 s).
+          final svcEarly = GlobalCallListenerService.instance.service;
+          if (svcEarly != null && svcEarly.socket?.connected != true) {
+            svcEarly.socket?.connect();
+            debugPrint('🔄 onIncomingVoipCall: socket reconnect kicked (session empty)');
+          }
+          debugPrint('❌ Session missing — socket reconnect kicked, waiting for whatsapp_call_incoming');
           break;
         }
 
@@ -199,7 +262,16 @@ class WhatsAppCallingConfig {
           break;
         }
 
-        await initializeCallListener();
+        // Reuse the service if it already exists — calling initializeCallListener()
+        // when a service is live tears it down (runs cleanupCall + replaces instance),
+        // which wipes SharedPreferences and socket state mid-call-setup.
+        final svcExisting = GlobalCallListenerService.instance.service;
+        if (svcExisting == null || !GlobalCallListenerService.instance.isInitialized) {
+          await initializeCallListener();
+        } else if (svcExisting.socket?.connected != true) {
+          svcExisting.socket?.connect();
+          debugPrint('🔄 onIncomingVoipCall: socket reconnected (service reused)');
+        }
         final service = GlobalCallListenerService.instance.service;
         if (service != null) {
           service.setPendingCall(callId: callId, sdp: sdpOffer);
@@ -215,6 +287,11 @@ class WhatsAppCallingConfig {
         final uuid2 = args2?['uuid'] as String? ?? '';
 
         final prefs2 = await SharedPreferences.getInstance();
+        // Reload before reading — AppDelegate may have written pending_call_session
+        // to NSUserDefaults (from VoIP push payload) while Flutter's in-memory
+        // cache still held an empty/stale value. Without reload we'd always see
+        // the stale value and fall into the 6-second Completer wait unnecessarily.
+        await prefs2.reload();
         String sessionStr2 = prefs2.getString('pending_call_session') ?? '';
         if (sessionStr2.isEmpty) {
           // Session is written by the socket's whatsapp_call_incoming handler.
@@ -236,7 +313,11 @@ class WhatsAppCallingConfig {
           }
 
           debugPrint('⏳ Session not ready — awaiting socket write');
-          _sessionCompleter = Completer<String>();
+          // Guard: reuse existing Completer if a concurrent VoIP push already
+          // created one — creating a new one would orphan the first await.
+          if (_sessionCompleter == null || _sessionCompleter!.isCompleted) {
+            _sessionCompleter = Completer<String>();
+          }
           sessionStr2 = await _sessionCompleter!.future
               .timeout(const Duration(seconds: 6), onTimeout: () => '');
           _sessionCompleter = null;
@@ -305,29 +386,64 @@ class WhatsAppCallingConfig {
           'avatar': avatar,
         });
 
+        // ── CRITICAL: answer the call HERE, directly, in the background. ──
+        // When the user accepts from the locked-phone CallKit UI the app stays
+        // backgrounded: iOS pumps NO frames, so WhatsAppCallingScreen never
+        // builds, its _initCall never runs, and the old flow (screen calls
+        // answerCall) never executed until the phone was unlocked — by which
+        // time the caller/server had timed out. CallKit has already activated
+        // the audio session (provider didActivate fired on answer), and the
+        // 'voip' background mode grants execution time, so the full WebRTC
+        // answer (getUserMedia → SDP answer → HTTP accept) works right here.
+        if (svc != null) {
+          // Bounded wait for the socket so remote ICE candidates delivered
+          // over it are not missed during ICE negotiation. Outgoing candidates
+          // are buffered regardless; this is best-effort, never a hard gate.
+          if (svc.socket?.connected != true) {
+            svc.socket?.connect();
+            int w = 0;
+            while (svc.socket?.connected != true && w < 20) {
+              await Future.delayed(const Duration(milliseconds: 200));
+              w++;
+            }
+            debugPrint(svc.socket?.connected == true
+                ? '✅ Socket ready before direct answer (${w * 200} ms)'
+                : '⚠️ Socket still down — answering anyway, ICE buffered');
+          }
+          try {
+            await svc.answerCall();
+            debugPrint('✅ Direct background answerCall completed');
+          } catch (e) {
+            debugPrint('❌ Direct answerCall failed: $e');
+            await svc.cleanupCall();
+          }
+        }
+
         // Navigate unconditionally — handlePendingCallNavigation checks
         // Get.context and queues via addPostFrameCallback if not ready.
-        // Removing the isAppInForeground gate fixes killed-state calls where
-        // the lifecycle transition fires after this handler completes.
+        // While locked this pushes the route without building it; the screen
+        // builds on unlock and syncs its UI from the already-live call.
         await handlePendingCallNavigation();
         break;
 
       case 'onCallEndedNatively':
         debugPrint('📵 Native Call Ended');
-        // terminateCall() must run BEFORE endAllCalls() so that currentCallId
-        // is still set when the HTTP /terminate-whatsapp-call goes out.
-        // Calling endAllCalls() first fires CallEventActionCallEnded on the
-        // stream → that calls terminateCall() asynchronously → but by then
-        // cleanupCall() has already nulled currentCallId → backendCallId = null
-        // → server never receives the terminate signal → other party stays on.
         final svcEnd = GlobalCallListenerService.instance.service;
+
+        // Guard: if terminateCall() already ran (e.g. Flutter-initiated end),
+        // isCallActive is false and the service is already clean — skip to avoid
+        // the double-terminate loop: terminateCall → endNativeCall → CXEndCallAction
+        // → CALL_ENDED_NATIVE → onCallEndedNatively → terminateCall again.
+        if (svcEnd != null && !svcEnd.isCallActive) {
+          debugPrint('ℹ️ onCallEndedNatively: call already cleaned up — skipping');
+          break;
+        }
+
+        // terminateCall() must run BEFORE endAllCalls() so currentCallId is still
+        // set when the HTTP /terminate-whatsapp-call goes out.
+        // onCallEnded is fired inside terminateCall() before cleanupCall() nulls it.
         await svcEnd?.terminateCall();
-        // Safety net: if service is absent, at least dismiss the flutter CallKit UI.
         if (svcEnd == null) await FlutterCallkitIncoming.endAllCalls();
-        // Notify the active call screen so it navigates back.
-        // Without this, the UI stays open forever when the user ends
-        // the call from the native CallKit screen (lock screen).
-        svcEnd?.onCallEnded?.call();
         break;
 
       default:
@@ -381,7 +497,31 @@ class WhatsAppCallingConfig {
             'avatar': avatar,
           });
 
-          if (isAppInForeground) await handlePendingCallNavigation();
+          // Answer directly in the background — killed-state variant of the
+          // locked-phone fix in onNativeCallAnswered. The app was launched
+          // headless by the VoIP push and stays backgrounded while locked:
+          // no frames are pumped, so the screen (and its answerCall) never
+          // runs until unlock. answerCall() is serialized internally, so a
+          // later screen-driven attempt is a safe no-op.
+          if (svc != null) {
+            if (svc.socket?.connected != true) {
+              svc.socket?.connect();
+              int w = 0;
+              while (svc.socket?.connected != true && w < 20) {
+                await Future.delayed(const Duration(milliseconds: 200));
+                w++;
+              }
+            }
+            try {
+              await svc.answerCall();
+              debugPrint('✅ Direct background answerCall completed (killed-state path)');
+            } catch (e) {
+              debugPrint('❌ Direct answerCall failed (killed-state path): $e');
+              await svc.cleanupCall();
+            }
+          }
+
+          await handlePendingCallNavigation();
         }
       }
     } catch (e) {
@@ -651,7 +791,13 @@ class WhatsAppCallingConfig {
       } else {
         debugPrint('📞 Unhandled CallKit event: $event');
       }
-    });
+    // cancelOnError: false keeps the subscription alive if a malformed event
+    // (e.g. ACTION_CALL_TOGGLE_AUDIO_SESSION with no id) throws a FormatException.
+    // Without this, the first bad event kills the stream and all subsequent
+    // CallKit events (accept, decline, timeout) are silently ignored.
+    }, onError: (e) {
+      debugPrint('⚠️ Android CallKit stream error (ignored): $e');
+    }, cancelOnError: false);
   }
 
   // ============================================
@@ -681,22 +827,19 @@ class WhatsAppCallingConfig {
       // artificial delay or polling loop.
       debugPrint('⏳ Context not ready — queuing for next frame');
       _pendingNavigation = nav;
-      WidgetsBinding.instance
-          .addPostFrameCallback((_) => handlePendingCallNavigation());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Staleness check: if the call ended before this frame fired,
+        // _pendingNavigation would open a screen for a dead call and then
+        // hold _callScreenOpen=true, blocking the next real call.
+        final svc = GlobalCallListenerService.instance.service;
+        if (svc?.hasActivePendingCall != true) {
+          debugPrint('ℹ️ Pending navigation stale (call gone) — clearing');
+          _pendingNavigation = null;
+          return;
+        }
+        handlePendingCallNavigation();
+      });
       return;
-    }
-
-    // On iOS, ensure microphone permission is resolved before the call screen
-    // opens. On first install getUserMedia() triggers the system dialog — if
-    // that happens mid-WebRTC-setup the server's answer timeout fires while
-    // the user is reading the dialog, dropping the first call. Requesting it
-    // here (while the screen is transitioning) means permission is already
-    // granted by the time answerCall() calls getUserMedia(). On subsequent
-    // calls the native API returns instantly (permission already cached).
-    if (Platform.isIOS) {
-      try {
-        await platform.invokeMethod('requestMicrophonePermission');
-      } catch (_) {}
     }
 
     await Future.delayed(const Duration(milliseconds: 300));
