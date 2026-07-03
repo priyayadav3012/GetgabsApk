@@ -157,7 +157,7 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
           _isConnected = true;
           _status = 'Connected';
         });
-        _startTimer();
+        _startTimer(initialElapsed: _elapsedSinceCallStart());
       } else if (statusLower.contains('accepted')) {
         setState(() => _status = 'Ringing...');
       } else if (statusLower.contains('ringing') ||
@@ -209,7 +209,7 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
             _isConnected = true;
             _status = 'Connected';
           });
-          _startTimer();
+          _startTimer(initialElapsed: _elapsedSinceCallStart());
         }
         return;
       }
@@ -311,6 +311,21 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     debugPrint('📴 Handling call end: $reason');
     _timer?.cancel();
 
+    // #changedWithJClaude — Reset the shared/global service's per-call state
+    // (_callAccepted, _hasActivePendingCall, etc.) on EVERY call-end path, not
+    // just the manual "end call" button (which already reset it via
+    // terminateCall() -> cleanupCall()). Without this, a call that ends via a
+    // remote hangup / no-answer / busy / declined / server "ended" status left
+    // _callAccepted stuck true on the reused global service. The NEXT real
+    // incoming call was then silently dropped by the _callAccepted guards in
+    // whtasapp_calling_service.dart (whatsapp_call_incoming listener and
+    // _answerCallInternal) — the CallKit screen still appeared (driven
+    // natively), but the Dart-side call never connected, so onStatusChange
+    // never received 'connected' and the duration timer never started.
+    // cleanupCall() is idempotent, so calling it again here on the manual
+    // end-call path (already cleaned by terminateCall()) is harmless.
+    _callingService?.cleanupCall();
+
     if (mounted) {
       setState(() {
         _status = reason;
@@ -324,8 +339,23 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     }
   }
 
-  void _startTimer() {
+  // #changedWithJClaude — the service sets callStartTime once, in
+  // onIceConnectionState, the moment the call truly connects. Deriving the
+  // elapsed time from it (instead of always starting _duration at zero) keeps
+  // the displayed duration correct if this screen is rebuilt/re-navigated
+  // mid-call (e.g. a stack-wipe restore) after the call already connected.
+  Duration _elapsedSinceCallStart() {
+    final start = _callingService?.callStartTime;
+    return start == null ? Duration.zero : DateTime.now().difference(start);
+  }
+
+  // #changedWithJClaude — accepts the call's real elapsed time so the timer
+  // continues correctly when this screen is rebuilt/re-navigated mid-call
+  // (e.g. a stack-wipe restore) instead of resetting the visible duration to
+  // 00:00 while the underlying call has been connected for a while already.
+  void _startTimer({Duration initialElapsed = Duration.zero}) {
     _timer?.cancel();
+    _duration = initialElapsed;
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && !_isEnded) {
         setState(() => _duration += const Duration(seconds: 1));
