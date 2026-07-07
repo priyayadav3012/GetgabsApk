@@ -140,7 +140,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       id: safeId,
       nameCaller: displayNameShort,
       handle: callerNumber,
-      appName: 'GetGabs',
+      appName: AppTheme.currentFlavor == 'messagedly'
+          ? 'Messagedly'
+          : AppTheme.currentFlavor == 'scalewiz'
+              ? 'Scalewiz'
+              : 'GetGabs',
       avatar: avatarUrl,
       type: 0,
       duration: 60000,
@@ -381,7 +385,11 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return GetMaterialApp(
-      title: 'GetGabs',
+      title: AppTheme.currentFlavor == 'messagedly'
+          ? 'Messagedly'
+          : AppTheme.currentFlavor == 'scalewiz'
+              ? 'Scalewiz'
+              : 'GetGabs',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
       debugShowCheckedModeBanner: false,
       locale: const Locale('en', 'US'),

@@ -26,6 +26,7 @@ class DashboardController extends GetxController {
   var searchCurrentPage = 1.obs;
   bool _callListenerInitialized = false;
   var tabBarIndex = 0;
+  var isAddingCustomer = false.obs;
 
   // FocusNode and TextEditingController
   final FocusNode focusNode = FocusNode();
@@ -45,6 +46,99 @@ class DashboardController extends GetxController {
   final ChatServices chatServices = ChatServices();
   GetStorageUserData userData = GetStorageUserData();
   NotificationService notificationService = NotificationService();
+
+  /// Returns a valid /partners/ bearer token, using the cached one unless
+  /// [forceRefresh] is set (used to retry once after an expired/rejected
+  /// token) or none is cached yet.
+  Future<String?> _getPartnerSessionToken({bool forceRefresh = false}) async {
+    if (!forceRefresh) {
+      final cached = await userData.getPartnerSessionToken();
+      if (cached != null) return cached;
+    }
+
+    final apiKey = await userData.getApiKey();
+    final response = await chatServices
+        .getSessionTokenService({"apikey": apiKey, "api_key": apiKey});
+
+    final token = response['access_token']?.toString();
+    if (token == null || token.isEmpty) {
+      debugPrint('❌ getSessionToken did not return access_token: $response');
+      return null;
+    }
+
+    final expiresIn =
+        int.tryParse(response['expires_in']?.toString() ?? '') ?? 86400;
+    await userData.savePartnerSessionToken(token, expiresIn);
+    return token;
+  }
+
+  /// Adds a new customer/WhatsApp chat via the partners/managechat API.
+  /// Returns true on success so the caller can close its dialog.
+  Future<bool> addCustomer({
+    required String customerName,
+    required String countryCode,
+    required String whatsappNumber,
+  }) async {
+    if (customerName.trim().isEmpty || whatsappNumber.trim().isEmpty) {
+      EasyLoading.showError('Please fill in all required fields');
+      return false;
+    }
+
+    isAddingCustomer.value = true;
+    try {
+      final profileNumber = '$countryCode$whatsappNumber';
+      Map<String, String> fields = {
+        "customer_name": customerName.trim(),
+        "country_code": countryCode,
+        "whatsapp_number": whatsappNumber.trim(),
+        "profile_number": profileNumber,
+      };
+
+      var token = await _getPartnerSessionToken();
+      if (token == null) {
+        EasyLoading.showError('Could not authenticate. Please try again.');
+        return false;
+      }
+
+      var value = await chatServices
+          .addCustomerService({...fields, "token": token});
+
+      // ✅ This API responds with {"success": ..., "msg": ...}, not the
+      // {"status": ..., "message": ...} shape the rest of the app uses.
+      //
+      // Only retry with a freshly-fetched token when the failure actually
+      // looks auth-related — otherwise a legitimate validation error (e.g.
+      // "Number already exists") would trigger a pointless duplicate call.
+      if (value['success'] != true) {
+        final msg = value['msg']?.toString().toLowerCase() ?? '';
+        final looksLikeAuthFailure = msg.contains('token') ||
+            msg.contains('auth') ||
+            msg.contains('unauthor');
+        if (looksLikeAuthFailure) {
+          token = await _getPartnerSessionToken(forceRefresh: true);
+          if (token != null) {
+            value = await chatServices
+                .addCustomerService({...fields, "token": token});
+          }
+        }
+      }
+
+      if (value['success'] == true) {
+        EasyLoading.showSuccess(value['msg']?.toString() ?? 'Customer added');
+        return true;
+      } else {
+        EasyLoading.showError(
+            value['msg']?.toString() ?? 'Failed to add customer');
+        return false;
+      }
+    } catch (e) {
+      debugPrint('❌ addCustomer error: $e');
+      EasyLoading.showError('Something went wrong');
+      return false;
+    } finally {
+      isAddingCustomer.value = false;
+    }
+  }
 
   /// Initialize WhatsApp call listener for incoming calls
   Future<void> initCallListener() async {
@@ -85,7 +179,11 @@ class DashboardController extends GetxController {
     });
 
     notificationService.requestNotificationPermission();
-    await notificationService.initLocalNotifications();
+    try {
+      await notificationService.initLocalNotifications();
+    } catch (e) {
+      debugPrint('❌ initLocalNotifications failed — continuing without it: $e');
+    }
     notificationService.getDeviceToken();
     notificationService.setupInteractMessage();
     notificationService.onInitTopic();

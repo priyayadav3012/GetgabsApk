@@ -11,7 +11,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/active_chat_model.dart';
-import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
@@ -63,14 +62,14 @@ class NotificationService {
       return;
     }
 
-    // ✅ Android: Messagedly flavor ke liye alag icon
+    // ✅ Android: default launcher icon — ic_notification_messagedly was
+    // referenced for the messagedly flavor but that mipmap resource was
+    // never added, which made initialize() throw and silently blocked
+    // chat list loading for that flavor only.
     // ✅ iOS: Android icon relevant nahi — default use hoga
-    final String notificationIcon =
-        LoginWithEmailController.currentFlavor == 'messagedly'
-            ? '@mipmap/ic_notification_messagedly'
-            : '@mipmap/ic_launcher';
+    const String notificationIcon = '@mipmap/ic_launcher';
 
-    var androidInitializationsSettings =
+    const androidInitializationsSettings =
         AndroidInitializationSettings(notificationIcon);
     var iOSInitializationsSettings = const DarwinInitializationSettings();
     var initializationSettings = InitializationSettings(

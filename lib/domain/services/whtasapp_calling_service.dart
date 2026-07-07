@@ -17,6 +17,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide navigator;
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
+import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'package:http/http.dart' as http;
@@ -594,7 +595,11 @@ class WhatsAppCallingService {
       final params = CallKitParams(
         id: callKitId,
         nameCaller: displayNameShort,
-        appName: 'GetGabs',
+        appName: AppTheme.currentFlavor == 'messagedly'
+            ? 'Messagedly'
+            : AppTheme.currentFlavor == 'scalewiz'
+                ? 'Scalewiz'
+                : 'GetGabs',
         avatar: avatarUrl,
         handle: callerNumber,
         type: 0,
@@ -1320,6 +1325,24 @@ class IncomingCallCard extends StatelessWidget {
     final initials = _getInitials(callerName);
     final formattedNumber = _formatPhoneDisplay(callerNumber);
 
+    // ✅ Per-flavor branding for the incoming-call header — was hardcoded to
+    // GetGabs green/"G"/"GetGabs Audio Calling" for all three apps.
+    final Color brandColor = AppTheme.currentFlavor == 'messagedly'
+        ? const Color(0xff4242D4)
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? const Color(0xff0E7C74)
+            : const Color(0xFF034737);
+    final String brandLetter = AppTheme.currentFlavor == 'messagedly'
+        ? 'M'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'S'
+            : 'G';
+    final String brandLabel = AppTheme.currentFlavor == 'messagedly'
+        ? 'Messagedly Audio Calling'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'Scalewiz Audio Calling'
+            : 'GetGabs Audio Calling';
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
@@ -1338,9 +1361,9 @@ class IncomingCallCard extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFF034737),
-              borderRadius: BorderRadius.only(
+            decoration: BoxDecoration(
+              color: brandColor,
+              borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(20),
                 topRight: Radius.circular(20),
               ),
@@ -1354,17 +1377,17 @@ class IncomingCallCard extends StatelessWidget {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(6)),
-                  child: const Center(
-                    child: Text('G',
+                  child: Center(
+                    child: Text(brandLetter,
                         style: TextStyle(
-                            color: Color(0xFF034737),
+                            color: brandColor,
                             fontSize: 16,
                             fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('GetGabs Audio Calling',
-                    style: TextStyle(
+                Text(brandLabel,
+                    style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14,
                         fontWeight: FontWeight.w600,

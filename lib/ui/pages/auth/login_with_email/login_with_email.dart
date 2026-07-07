@@ -103,10 +103,12 @@ class LoginWithEmailScreen extends StatelessWidget {
 
                 SizedBox(height: hp * 0.018),
 
-                // Badge
-                _Anim(opacity: c.opacity(0.00, 0.40),
-                      offset:  c.offset(0.00, 0.40, start: const Offset(0, -0.22)),
-                      child: const Center(child: _Badge())),
+                // Badge — Scalewiz is not a Meta Official Partner, so this is
+                // hidden for that flavor only.
+                if (!_C.isScalewiz)
+                  _Anim(opacity: c.opacity(0.00, 0.40),
+                        offset:  c.offset(0.00, 0.40, start: const Offset(0, -0.22)),
+                        child: const Center(child: _Badge())),
 
                 // SizedBox(height: hp * 0.030),
 
