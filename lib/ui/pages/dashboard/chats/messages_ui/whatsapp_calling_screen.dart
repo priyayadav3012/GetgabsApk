@@ -204,12 +204,22 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
       // Subsequent status changes still arrive via onStatusChange (attached above).
       if (_callingService!.callAccepted) {
         debugPrint('✅ Call already answered natively — syncing UI to live call');
-        if (_callingService!.callStatus.toLowerCase().contains('connected')) {
+        final alreadyConnected = _callingService!.callStartTime != null ||
+            _callingService!.callStatus.toLowerCase().contains('connected');
+        if (alreadyConnected) {
           setState(() {
             _isConnected = true;
             _status = 'Connected';
           });
           _startTimer(initialElapsed: _elapsedSinceCallStart());
+        } else {
+          // accepted but not yet connected — keep showing latest known status;
+          // onStatusChange (already attached above) will update it when 'connected' arrives
+          setState(() {
+            _status = _callingService!.callStatus.isNotEmpty
+                ? _callingService!.callStatus
+                : 'Connecting...';
+          });
         }
         return;
       }
@@ -385,7 +395,7 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     HapticFeedback.lightImpact();
   }
 
-  void _endCall() {
+  void _endCall(){
     HapticFeedback.mediumImpact();
     _callingService?.terminateCall();
     _handleCallEnded('Call ended');

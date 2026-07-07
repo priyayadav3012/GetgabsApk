@@ -1474,7 +1474,7 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   String _status = 'Connecting...';
   Duration _duration = Duration.zero;
   Timer? _timer;
@@ -1487,22 +1487,85 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _waveController =
         AnimationController(duration: const Duration(seconds: 2), vsync: this)
           ..repeat();
 
-    // ✅ iOS: postFrameCallback use karo + foreground check
-    // ✅ Android: direct answerCall
-    if (Platform.isIOS) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
-            !widget.callingService.callAccepted) {
-          await _answerCall();
-        }
-      });
-    } else {
-      _answerCall();
+    _attachCallCallbacks();
+    _syncServiceState();
+
+    // Answer the incoming call once the UI is ready and the app is
+    // in the foreground on iOS. If the app is still inactive after the first
+    // frame, didChangeAppLifecycleState will retry when resumed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryAnswerIfNeeded();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _tryAnswerIfNeeded();
     }
+  }
+
+  void _attachCallCallbacks() {
+    widget.callingService.onStatusChange = (s) {
+      if (!mounted || _isEnded) return;
+      final statusLower = s.toLowerCase();
+      if (statusLower.contains('connected')) {
+        setState(() {
+          _isConnected = true;
+          _status = 'Connected';
+        });
+        _startTimer();
+      } else if (statusLower.contains('accepted')) {
+        setState(() {});
+      } else if (statusLower.contains('ended') ||
+          statusLower.contains('failed') ||
+          statusLower.contains('terminated') ||
+          statusLower.contains('declined')) {
+        _handleCallEnded(s);
+      } else {
+        setState(() => _status = s);
+      }
+    };
+
+    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
+    widget.callingService.onError = (e) {
+      if (mounted && !_isEnded) _handleCallEnded(e);
+    };
+  }
+
+  void _syncServiceState() {
+    if (!widget.callingService.callAccepted) return;
+
+    final alreadyConnected = widget.callingService.callStartTime != null ||
+        widget.callingService.callStatus.toLowerCase().contains('connected');
+
+    if (alreadyConnected) {
+      setState(() {
+        _isConnected = true;
+        _status = 'Connected';
+      });
+      _startTimer();
+    } else {
+      setState(() {
+        _status = widget.callingService.callStatus.isNotEmpty
+            ? widget.callingService.callStatus
+            : 'Connecting...';
+      });
+    }
+  }
+
+  void _tryAnswerIfNeeded() {
+    if (widget.callingService.callAccepted) return;
+    if (Platform.isIOS &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    _answerCall();
   }
 
   String _getInitials(String name, String number) {
@@ -1558,31 +1621,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   }
 
   Future<void> _answerCall() async {
-    widget.callingService.onStatusChange = (s) {
-      if (!mounted || _isEnded) return;
-      final statusLower = s.toLowerCase();
-      if (statusLower.contains('connected')) {
-        setState(() {
-          _isConnected = true;
-          _status = 'Connected';
-        });
-        _startTimer();
-      } else if (statusLower.contains('accepted')) {
-        setState(() {});
-      } else if (statusLower.contains('ended') ||
-          statusLower.contains('failed') ||
-          statusLower.contains('terminated') ||
-          statusLower.contains('declined')) {
-        _handleCallEnded(s);
-      } else {
-        setState(() => _status = s);
-      }
-    };
-    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
-    widget.callingService.onError = (e) {
-      if (mounted && !_isEnded) _handleCallEnded(e);
-    };
-
     try {
       if (widget.pendingSdp == null || widget.pendingCallId == null) {
         _handleCallEnded('Call expired');
@@ -1614,6 +1652,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     WhatsAppCallingConfig.notifyCallScreenClosed();
     _waveController.dispose();
     _timer?.cancel();
