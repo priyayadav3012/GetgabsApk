@@ -368,7 +368,11 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                         children: [
                           // Dynamic Branding Text condition applied based on active target compilation client flavor
                           Text(
-                            _C.isMessagedly ? 'Powered by Messagedly' : 'Powered by Getgabs',
+                            _C.isMessagedly
+                                ? 'Powered by Messagedly'
+                                : _C.isScalewiz
+                                    ? 'Powered by Scalewiz'
+                                    : 'Powered by Getgabs',
                             style: TextStyle(
                               fontSize: 11,
                               color: _C.muted,

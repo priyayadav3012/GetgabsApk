@@ -232,6 +232,35 @@ Future<String> getApiKey() async {
   //   return true;
   // }
 
+  //---------------------------Partners API session token---------------------------
+
+  /// Caches the /partners/ bearer token with its expiry so getSessionToken
+  /// only needs to be called again once it actually expires.
+  Future<void> savePartnerSessionToken(String token, int expiresInSeconds) async {
+    final box = GetStorage();
+    await box.initStorage;
+    final expiresAt = DateTime.now()
+        .add(Duration(seconds: expiresInSeconds))
+        .millisecondsSinceEpoch;
+    box.write('partner_session_token', token);
+    box.write('partner_session_token_expires_at', expiresAt);
+  }
+
+  /// Returns the cached bearer token, or null if missing/expired (leaving a
+  /// 60s safety margin so a call doesn't start with a token that expires
+  /// mid-request).
+  Future<String?> getPartnerSessionToken() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final token = box.read('partner_session_token');
+    final expiresAt = box.read('partner_session_token_expires_at');
+    if (token == null || expiresAt == null) return null;
+    final safeExpiry = DateTime.fromMillisecondsSinceEpoch(expiresAt as int)
+        .subtract(const Duration(seconds: 60));
+    if (DateTime.now().isAfter(safeExpiry)) return null;
+    return token.toString();
+  }
+
   bool clearAllData() {
     try {
       GetStorage().erase();

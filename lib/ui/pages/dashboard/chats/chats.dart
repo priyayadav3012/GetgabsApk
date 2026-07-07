@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/add_customer_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chats.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/rolling_over_chats.dart/rolling_over_chats.dart';
 import 'package:getgabs/ui/res/assets/image_assets.dart';
@@ -149,7 +150,12 @@ class ChatsScreen extends StatelessWidget {
             ),
           ),
         ),
- 
+        floatingActionButton: FloatingActionButton(
+          backgroundColor: AppTheme.appThemeColor,
+          onPressed: () => showAddCustomerDialog(dashboardController),
+          child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+        ),
+
         // appBar: AppBar(
         //   backgroundColor: AppTheme.whiteColor,
         //   automaticallyImplyLeading: false,

@@ -27,6 +27,7 @@ class ApiEndPoints {
   static _DashboardEndPoints dashboardEndPoints = _DashboardEndPoints();
   static _ChatEndPoints chatEndPoints = _ChatEndPoints();
   static _MoreScreenEndPoints moreScreenEndPoints = _MoreScreenEndPoints();
+  static _PartnersEndPoints partnersEndPoints = _PartnersEndPoints();
 
   // ✅ Scalewiz ka login endpoint v3 pe hai, baaki sab endpoints v2 pe hi rahenge
   static String get loginBaseUrl =>
@@ -60,6 +61,19 @@ class _ChatEndPoints {
 
 class _MoreScreenEndPoints {
   final String logoutUrl = "logout";
+}
+
+class _PartnersEndPoints {
+  // ✅ Full absolute URLs — live under /partners/, not under
+  // ApiEndPoints.baseUrl's v2/flutterapplication/ path like the other endpoints.
+  // This namespace authenticates via a short-lived bearer/session token
+  // (fetched from getSessionToken using the WhatsApp Business api_key) and
+  // expects multipart/form-data bodies (confirmed via curl --form examples),
+  // not JSON or plain x-www-form-urlencoded.
+  final String getSessionTokenUrl =
+      "https://app.getgabs.com/partners/getSessionToken";
+  final String addCustomerUrl =
+      "https://app.getgabs.com/partners/managechat/chat/add-customer";
 }
 
 // ============================================

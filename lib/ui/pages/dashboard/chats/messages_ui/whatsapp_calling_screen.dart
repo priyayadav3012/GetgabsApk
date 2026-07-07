@@ -40,12 +40,25 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   WhatsAppCallingService? _callingService;
 
-  bool get isMessagedly => (AppTheme.unreadMessagesColor.value != 0xFF25D366 &&
-      AppTheme.unreadMessagesColor != Colors.green);
+  // #changedWithJClaude — this used to infer the flavor by comparing
+  // AppTheme.unreadMessagesColor against GetGabs' green, which broke for
+  // Scalewiz: its teal isn't green either, so isMessagedly evaluated true
+  // and the calling screen showed Messagedly's blue on Scalewiz. Checking
+  // the actual flavor directly is correct for all three apps.
+  bool get isMessagedly => AppTheme.currentFlavor == 'messagedly';
+  bool get isScalewiz => AppTheme.currentFlavor == 'scalewiz';
 
   // 🎨 DYNAMIC COLORS DEFINITION
-  Color get primaryColor => isMessagedly ? const Color(0xff4242D4) : const Color(0xFF00A884); // Messagedly par absolute Blue 🔵 / GetGabs par Green 🟢
-  Color get darkBgColor => isMessagedly ? const Color(0xff1A1A5E) : const Color(0xFF034737);   // Waves aur status ke liye dark variant
+  Color get primaryColor => isMessagedly
+      ? const Color(0xff4242D4) // Messagedly Blue
+      : isScalewiz
+          ? const Color(0xff17A398) // Scalewiz Teal
+          : const Color(0xFF00A884); // GetGabs Green
+  Color get darkBgColor => isMessagedly
+      ? const Color(0xff1A1A5E)
+      : isScalewiz
+          ? const Color(0xff0E7C74)
+          : const Color(0xFF034737);
   
   String _status = 'Connecting...';
   Duration _duration = Duration.zero;
