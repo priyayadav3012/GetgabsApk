@@ -14,18 +14,21 @@ class SplashScreen extends StatelessWidget {
     SplashScreenController.find.startAnimation();
     var mediaQuery = MediaQuery.of(context).size;
     return Scaffold(
-      backgroundColor: Colors.white,
+      // backgroundColor: Colors.white,
       body: Stack(
         children: [
           Obx(
             () => AnimatedOpacity(
-              duration: const Duration(milliseconds: 1600),
+              duration: const Duration(milliseconds: 100),
               opacity: splashController.animate.value ? 1 : 0,
               child: Center(
-                child: Image.asset(
-                  ImageAssets.getgabsLogoPng,
-                  width: mediaQuery.width * 0.7, // Adjust width as needed
-                  height: mediaQuery.height * 0.5, // Adjust height as needed
+                child: Hero(
+                  tag: 'app_logo',
+                  child: Image.asset(
+                    ImageAssets.getgabsLogoPng,
+                    width: mediaQuery.width * 0.7, // Adjust width as needed
+                    height: mediaQuery.height * 0.5, // Adjust height as needed
+                  ),
                 ),
               ),
             ),

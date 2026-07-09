@@ -80,7 +80,8 @@ class DashboardController extends GetxController {
     required String whatsappNumber,
   }) async {
     if (customerName.trim().isEmpty || whatsappNumber.trim().isEmpty) {
-      EasyLoading.showError('Please fill in all required fields');
+      EasyLoading.showError('Please fill in all required fields',
+          duration: const Duration(seconds: 5));
       return false;
     }
 
@@ -96,7 +97,9 @@ class DashboardController extends GetxController {
 
       var token = await _getPartnerSessionToken();
       if (token == null) {
-        EasyLoading.showError('Could not authenticate. Please try again.');
+        EasyLoading.showError(
+            'Unable to add customer right now. Please try again.',
+            duration: const Duration(seconds: 5));
         return false;
       }
 
@@ -124,16 +127,21 @@ class DashboardController extends GetxController {
       }
 
       if (value['success'] == true) {
-        EasyLoading.showSuccess(value['msg']?.toString() ?? 'Customer added');
+        EasyLoading.showSuccess('Customer added to Rolling Over chats',
+            duration: const Duration(seconds: 5));
+        refreshRollingOverChatList(increment: 'replace');
+        refreshActiveChatList(increment: 'replace');
         return true;
       } else {
         EasyLoading.showError(
-            value['msg']?.toString() ?? 'Failed to add customer');
+            value['msg']?.toString() ?? 'Failed to add customer',
+            duration: const Duration(seconds: 5));
         return false;
       }
     } catch (e) {
       debugPrint('❌ addCustomer error: $e');
-      EasyLoading.showError('Something went wrong');
+      EasyLoading.showError('Something went wrong',
+          duration: const Duration(seconds: 5));
       return false;
     } finally {
       isAddingCustomer.value = false;
@@ -393,7 +401,6 @@ class DashboardController extends GetxController {
         if (value['status']) {
           debugPrint(
               'Active Chat List API called with pppppppppppppppppppppppppppppp: $increment');
-          EasyLoading.dismiss();
           List<dynamic> profileData = value['message']['data']['data'] ?? [];
           debugPrint('Received profile data: ${profileData.toString()}');
           if (increment == "replace") {
@@ -415,12 +422,10 @@ class DashboardController extends GetxController {
       }).onError((error, stackTrace) {
         print(error);
         print(stackTrace);
-        EasyLoading.dismiss();
       }).whenComplete(() {
         isApiCallInProgress.value = false;
         isActiveApiInCall.value = false;
         isChatPageLoading.value = false;
-        EasyLoading.dismiss();
       });
     } catch (error, stackTrace) {
       isApiCallInProgress.value = false;
@@ -428,7 +433,6 @@ class DashboardController extends GetxController {
       isChatPageLoading.value = false;
       print('Error: $error');
       print('Stack Trace: $stackTrace');
-      EasyLoading.dismiss();
     }
   }
 
@@ -461,7 +465,6 @@ class DashboardController extends GetxController {
       await chatServices.activeChatList(data, headers: headers).then((value) {
         if (value['status']) {
           isInActiveApiInCall.value = false;
-          EasyLoading.dismiss();
           List<dynamic> profileData = value['message']['data']['data'] ?? [];
 
           if (increment == "replace") {

@@ -270,6 +270,9 @@ class LoginWithEmailController extends GetxController
                 WhatsAppCallingConfig.flushPendingVoipToken();
               }
             }
+            // Mic/notification permission dialogs — deferred from app
+            // startup until the user has actually logged in.
+            requestRuntimePermissions();
             Get.offAllNamed(AppRoute.dashboard);
           });
         });

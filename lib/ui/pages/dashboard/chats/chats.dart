@@ -30,13 +30,26 @@ class ChatsScreen extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.start,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Chats',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontSize: 26,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  children: [
+                    Hero(
+                      tag: 'app_logo',
+                      child: Image.asset(
+                        ImageAssets.getgabsLogoPng,
+                        width: 32,
+                        height: 32,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Chats',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
                 Container(
                   height: 45,
@@ -151,9 +164,13 @@ class ChatsScreen extends StatelessWidget {
           ),
         ),
         floatingActionButton: FloatingActionButton(
-          backgroundColor: AppTheme.appThemeColor,
+          backgroundColor: Colors.white,
+          elevation: 2,
+          shape: const CircleBorder(
+            side: BorderSide(color: Color(0xFF034737), width: 1.5),
+          ),
           onPressed: () => showAddCustomerDialog(dashboardController),
-          child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+          child: const Icon(Icons.add, color: Color(0xFF034737)),
         ),
 
         // appBar: AppBar(
