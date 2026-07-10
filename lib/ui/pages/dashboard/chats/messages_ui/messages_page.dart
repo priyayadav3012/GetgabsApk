@@ -650,17 +650,37 @@ if (message.messageType == 'text') {
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
     } else {
+      // Unrecognized messageType (e.g. an auto-generated/system message
+      // whose type isn't one of the cases above) used to render as a
+      // totally blank bubble. Fall back to showing the raw text/body
+      // instead of dropping the content silently.
+      String displayText = message.messageText;
+      try {
+        final decoded = jsonDecode(message.messageText);
+        if (decoded is Map) {
+          final body = decoded['text']?['body']?.toString() ??
+              decoded['body']?.toString() ??
+              decoded['caption']?.toString();
+          if (body != null && body.isNotEmpty) displayText = body;
+        }
+      } catch (_) {}
+      if (displayText.trim().isEmpty) {
+        displayText = '[${message.messageType}]';
+      }
+
       return BaseMessageUi(
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
-        child: const Column(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [SizedBox(height: 5), SelectableText('')],
+          children: [
+            const SizedBox(height: 5),
+            SelectableText(displayText),
+          ],
         ),
       );
-      // return ;
     }
   }
 

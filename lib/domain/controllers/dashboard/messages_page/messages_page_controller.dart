@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
@@ -351,8 +352,89 @@ final TextEditingController headerTextController = TextEditingController();
         var dc = Get.find<DashboardController>();
         dc.focusNode.unfocus(); // Prevent focus on load
       });
+
+      // Safety net: sockets can silently miss a "delivered"/"read" event
+      // (app backgrounded, brief disconnect, etc.) leaving a tick stuck
+      // forever until the chat is reopened. Periodically reconcile with
+      // the server while the chat is open so it self-heals instead.
+      _startStatusResync();
     } catch (e) {
       debugPrint('❌ Error in onInit setup: $e');
+    }
+  }
+
+  Timer? _statusResyncTimer;
+
+  void _startStatusResync() {
+    _statusResyncTimer?.cancel();
+    // Only fires the network call when a message is actually still pending
+    // a final status (see the hasPending guard below), so a short interval
+    // here is cheap and makes the fallback path feel near-instant.
+    _statusResyncTimer =
+        Timer.periodic(const Duration(seconds: 3), (_) {
+      _resyncPendingMessageStatuses();
+    });
+  }
+
+  void _stopStatusResync() {
+    _statusResyncTimer?.cancel();
+    _statusResyncTimer = null;
+  }
+
+  /// Re-checks delivery status for our own messages that aren't at a final
+  /// state ('read'/'failed') yet, merging fresh statuses into the local
+  /// list by messageId without disturbing pagination or scroll position.
+  Future<void> _resyncPendingMessageStatuses() async {
+    final hasPending = messageChatList.any((m) {
+      final status = m.deliveryStatus?.toLowerCase();
+      return m.isSentByMe && status != 'read' && status != 'failed';
+    });
+    if (!hasPending || isApiCallInProgress) return;
+
+    try {
+      final parentUserId = await userData.getParentUserId();
+      final currentUserId = await userData.getLoggedInUserId();
+      final apiKey = await userData.getApiKey();
+      final currentUserRole = await userData.getUserRole();
+      final userPrivilage = await userData.getUserPrivilage();
+
+      Map data = {
+        "parent_user_id": parentUserId,
+        "current_user_id": currentUserId,
+        "api_key": apiKey,
+        "customer_key": profileWaKey,
+        "current_user_role": currentUserRole,
+        "page": "1",
+        "user_privilage": userPrivilage
+      };
+      Map<String, String> headers = {
+        "X-Client-GetGabs": apiKey.toString(),
+        "Content-Type": "application/json"
+      };
+
+      final value = await chatServices.loadChats(data, headers: headers);
+      if (value['status'] != true) return;
+
+      final List<dynamic> freshList = value['message']['data']['data'] ?? [];
+      bool changed = false;
+      for (final raw in freshList) {
+        final fresh = Message.fromJson(raw);
+        final index = messageChatList
+            .indexWhere((msg) => msg.messageId == fresh.messageId);
+        if (index != -1 &&
+            messageChatList[index].deliveryStatus?.toLowerCase() !=
+                fresh.deliveryStatus?.toLowerCase()) {
+          messageChatList[index] = messageChatList[index]
+              .copyWith(deliveryStatus: fresh.deliveryStatus);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+      }
+    } catch (e) {
+      debugPrint('⚠️ Status resync error: $e');
     }
   }
 
@@ -581,10 +663,17 @@ if (Get.isRegistered<DashboardController>()) {
     }
   }
 
+  // Buffers status events that arrive for a message before its temp ID has
+  // been swapped for the server-assigned ID (see updateMessageId below).
+  final Map<String, dynamic> _pendingStatusUpdates = {};
+
   void handelIcomingMessageStatus(dynamic data) {
     debugPrint('Chat status: $data');
 
-    var messageId = data['data']['message_id'];
+    // Normalize to String: the socket payload's message_id can arrive as a
+    // number while Message.messageId is always a String, which made the
+    // indexWhere below fail to match and silently drop every status update.
+    var messageId = data['data']['message_id']?.toString();
     var deliveryStatus = data['data']['delivery_status'];
     debugPrint("((((((((((((((((((()))))))))))))))))))");
     debugPrint('📨 Raw delivery status: "$deliveryStatus" (type: ${deliveryStatus.runtimeType})');
@@ -603,6 +692,14 @@ if (Get.isRegistered<DashboardController>()) {
       }
 
       groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+    } else {
+      // The status event beat updateMessageId() here — the message is still
+      // in the list under its temporary ID. Buffer it so it can be applied
+      // as soon as the real ID is assigned instead of being silently dropped.
+      debugPrint('⏳ No match for $messageId yet, buffering status update');
+      if (messageId != null) {
+        _pendingStatusUpdates[messageId] = data['data'];
+      }
     }
   }
 
@@ -894,7 +991,7 @@ if (Get.isRegistered<DashboardController>()) {
     chatServices.sendMessageService(data, headers: headers).then((value) {
       if (value['status']) {
         print(value);
-        var actualMessageId = value['message']['message_id'];
+        var actualMessageId = value['message']['message_id'].toString();
         updateMessageId(
             tempMessageId, actualMessageId); // Update message ID in list
       } else {
@@ -909,12 +1006,29 @@ if (Get.isRegistered<DashboardController>()) {
     print(index);
     print('helllloworldddddd');
     if (index != -1) {
-      messageChatList[index] =
-          messageChatList[index].copyWith(messageId: actualMessageId);
+      // The API confirmed the message reached the server, so it's at least
+      // "sent" now — swap the temp ID and clear the "sending" clock icon.
+      messageChatList[index] = messageChatList[index]
+          .copyWith(messageId: actualMessageId, deliveryStatus: 'sent');
       print(messageChatList[index].messageText);
       print(actualMessageId);
       print('datatemplateeeee');
       print(messageChatList[index].templateData);
+
+      // Apply any status update (delivered/read) that arrived via socket
+      // before we got here and was buffered under the real message ID.
+      final pending = _pendingStatusUpdates.remove(actualMessageId);
+      if (pending != null) {
+        if (pending['message_type'] == "template") {
+          messageChatList[index] = Message.fromJson(pending);
+        } else {
+          final normalizedStatus =
+              pending['delivery_status']?.toString().toLowerCase() ?? 'sent';
+          messageChatList[index] =
+              messageChatList[index].copyWith(deliveryStatus: normalizedStatus);
+        }
+      }
+
       groupedMessages.assignAll(groupMessagesByDate(messageChatList));
     }
   }
@@ -983,7 +1097,7 @@ if (Get.isRegistered<DashboardController>()) {
         final messageText = message['message_text'];
         final messageType = message['message_type'];
         // sendMediaMessage(key, messageText, messageType);
-        var actualMessageId = message['message_id'];
+        var actualMessageId = message['message_id'].toString();
         updateMessageId(
             tempMessageId, actualMessageId); // Update message ID in list
       } else {
@@ -1063,7 +1177,7 @@ if (Get.isRegistered<DashboardController>()) {
         .sendHelloWorldTemplateService(jsonData, headers: headers)
         .then((value) {
       if (value['status']) {
-        var actualMessageId = value['message']['data']['message_id'];
+        var actualMessageId = value['message']['data']['message_id'].toString();
         updateTemplateMessageId(
             tempMessageId, actualMessageId, value['message']['data']);
       } else {
@@ -1872,6 +1986,7 @@ if (Get.isRegistered<DashboardController>()) {
 // ... (rest of your existing variables)
   @override
   void onClose() {
+    _stopStatusResync();
     scrollController.removeListener(_scrollListener);
     scrollController.dispose();
     profileWaKey = '';
