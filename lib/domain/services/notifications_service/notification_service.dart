@@ -11,7 +11,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/active_chat_model.dart';
-import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
+import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
@@ -63,14 +63,14 @@ class NotificationService {
       return;
     }
 
-    // ✅ Android: Messagedly flavor ke liye alag icon
+    // ✅ Android: default launcher icon — ic_notification_messagedly was
+    // referenced for the messagedly flavor but that mipmap resource was
+    // never added, which made initialize() throw and silently blocked
+    // chat list loading for that flavor only.
     // ✅ iOS: Android icon relevant nahi — default use hoga
-    final String notificationIcon =
-        LoginWithEmailController.currentFlavor == 'messagedly'
-            ? '@mipmap/ic_notification_messagedly'
-            : '@mipmap/ic_launcher';
+    const String notificationIcon = '@mipmap/ic_launcher';
 
-    var androidInitializationsSettings =
+    const androidInitializationsSettings =
         AndroidInitializationSettings(notificationIcon);
     var iOSInitializationsSettings = const DarwinInitializationSettings();
     var initializationSettings = InitializationSettings(
@@ -343,6 +343,17 @@ class NotificationService {
       if (msgType == 'incoming_call' || msgType == 'call_terminated') {
         debugPrint('📞 Call notification — skipping');
         return;
+      }
+
+      // Refresh the in-app chat lists so the customer moves to the top /
+      // shows as unread. This must happen regardless of whether Android
+      // also auto-displays a system notification below — that only covers
+      // the tray, not the in-app list, and the Socket.IO 'chatdata' event
+      // this used to rely on doesn't reliably fire for every message.
+      if (msgType == 'new_message' && Get.isRegistered<DashboardController>()) {
+        final dc = Get.find<DashboardController>();
+        dc.refreshActiveChatList(increment: 'replace');
+        dc.refreshRollingOverChatList(increment: 'replace');
       }
 
       if (Platform.isIOS) {

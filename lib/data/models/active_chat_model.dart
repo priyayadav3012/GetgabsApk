@@ -135,10 +135,10 @@ class Profile {
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
-      profileWaId: json['profile_wa_id'] ?? 0,
+      profileWaId: int.tryParse(json['profile_wa_id'].toString()) ?? 0,
       profileWaKey: json['profile_wa_key'] ?? "",
       profileName: json['profile_name'] ?? "",
-      getPendingMsgCount: json['getpendingmsg_count'] ?? 0,
+      getPendingMsgCount: int.tryParse(json['getpendingmsg_count'].toString()) ?? 0,
       updatedTime: json['updatedtime'] ?? "",
       hasVoiceCallingPermission:
           (json['hasVoiceCallingPermission'] ?? "no") == "yes",

@@ -46,40 +46,88 @@ class GetStorageUserData extends GetxController {
 
   /// Returns the general auth api_key (used for socket auth).
   /// Priority: top-level > facebook_details > getadmininfo
-  Future<String> getApiKey() async {
+  // Future<String> getApiKey() async {
+  //   try {
+  //     final box = GetStorage();
+  //     await box.initStorage;
+  //     final storedDataJson = box.read('responseData');
+
+  //     if (storedDataJson == null) {
+  //       debugPrint('⚠️ getApiKey: responseData is null in storage');
+  //       return '';
+  //     }
+
+  //     final Map<String, dynamic> storedData = json.decode(storedDataJson);
+
+  //     // 1. Top-level api_key
+  //     final topLevel = storedData['api_key']?.toString() ?? '';
+  //     if (topLevel.isNotEmpty) {
+  //       return topLevel;
+  //     }
+
+  //     // 2. facebook_details at root
+  //     final key2 = _extractFbApiKey(storedData['facebook_details']);
+  //     if (key2.isNotEmpty) return key2;
+
+  //     // 3. getadmininfo (agent login response)
+  //     final key3 = _extractAdminInfoApiKey(storedData['getadmininfo']);
+  //     if (key3.isNotEmpty) return key3;
+
+  //     return '';
+  //   } catch (e) {
+  //     debugPrint('❌ getApiKey error: $e');
+  //     return '';
+  //   }
+  // }
+Future<String> getApiKey() async {
     try {
       final box = GetStorage();
       await box.initStorage;
       final storedDataJson = box.read('responseData');
 
+      debugPrint('⚠️ ResponseData is null in storage for apiKey: $storedDataJson ${storedDataJson == null}');
+      
       if (storedDataJson == null) {
-        debugPrint('⚠️ getApiKey: responseData is null in storage');
+        debugPrint('⚠️ ResponseData is null in storage');
         return '';
       }
-
+      
       final Map<String, dynamic> storedData = json.decode(storedDataJson);
 
-      // 1. Top-level api_key
-      final topLevel = storedData['api_key']?.toString() ?? '';
-      if (topLevel.isNotEmpty) {
-        return topLevel;
+      // Check facebook_details FIRST (priority) ✅
+      final fbApiKey = storedData['facebook_details']?[0]?['api_key'];
+      if (fbApiKey != null && fbApiKey.toString().isNotEmpty) {
+        final apiKeyStr = fbApiKey.toString();
+        debugPrint('📱 ApiKey from facebook_details: ${apiKeyStr.substring(0, 10)}...');
+        return apiKeyStr;
       }
 
-      // 2. facebook_details at root
-      final key2 = _extractFbApiKey(storedData['facebook_details']);
-      if (key2.isNotEmpty) return key2;
+      // Check getadmininfo nested structure
+      if (storedData['getadmininfo'] != null) {
+        final apiKey = storedData['getadmininfo']['facebook_details']?[0]?['api_key'];
+        if (apiKey != null && apiKey.toString().isNotEmpty) {
+          final apiKeyStr = apiKey.toString();
+          debugPrint('📱 ApiKey from getadmininfo: ${apiKeyStr.substring(0, 10)}...');
+          return apiKeyStr;
+        }
+      }
 
-      // 3. getadmininfo (agent login response)
-      final key3 = _extractAdminInfoApiKey(storedData['getadmininfo']);
-      if (key3.isNotEmpty) return key3;
-
+      // Fallback - top-level api_key                                                                                                                                                                                                                                                                                                                                                    
+      if (storedData['api_key'] != null && storedData['api_key'].toString().isNotEmpty) {
+        final apiKey = storedData['api_key'].toString();
+        debugPrint('📱 ApiKey from top-level: ${apiKey.substring(0, 10)}...');
+        return apiKey;
+      }
+      
+      debugPrint('⚠️ ApiKey not found in response data');
+      debugPrint('📋 Available keys: ${storedData.keys.toList()}');
       return '';
     } catch (e) {
-      debugPrint('❌ getApiKey error: $e');
+      debugPrint('❌ Error getting apiKey: $e');
       return '';
     }
   }
-
+  
   /// Returns the WhatsApp Business API key used for CALLING.
   /// Only looks at facebook_details (NOT top-level api_key which is an auth token).
   /// Priority: facebook_details at root > getadmininfo.facebook_details
@@ -183,6 +231,35 @@ class GetStorageUserData extends GetxController {
 
   //   return true;
   // }
+
+  //---------------------------Partners API session token---------------------------
+
+  /// Caches the /partners/ bearer token with its expiry so getSessionToken
+  /// only needs to be called again once it actually expires.
+  Future<void> savePartnerSessionToken(String token, int expiresInSeconds) async {
+    final box = GetStorage();
+    await box.initStorage;
+    final expiresAt = DateTime.now()
+        .add(Duration(seconds: expiresInSeconds))
+        .millisecondsSinceEpoch;
+    box.write('partner_session_token', token);
+    box.write('partner_session_token_expires_at', expiresAt);
+  }
+
+  /// Returns the cached bearer token, or null if missing/expired (leaving a
+  /// 60s safety margin so a call doesn't start with a token that expires
+  /// mid-request).
+  Future<String?> getPartnerSessionToken() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final token = box.read('partner_session_token');
+    final expiresAt = box.read('partner_session_token_expires_at');
+    if (token == null || expiresAt == null) return null;
+    final safeExpiry = DateTime.fromMillisecondsSinceEpoch(expiresAt as int)
+        .subtract(const Duration(seconds: 60));
+    if (DateTime.now().isAfter(safeExpiry)) return null;
+    return token.toString();
+  }
 
   bool clearAllData() {
     try {

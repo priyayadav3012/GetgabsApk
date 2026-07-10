@@ -234,6 +234,9 @@ class LoginWithEmailController extends GetxController
     if (currentFlavor == 'messagedly') {
       data['white_label'] = 'true';
       print('🎯 Flavor: Messagedly — white_label=true');
+    } else if (currentFlavor == 'scalewiz') {
+      data['white_label'] = 'true';
+      print('🎯 Flavor: Scalewiz — white_label=true');
     } else {
       print('🎯 Flavor: GetGabs');
     }
@@ -267,6 +270,9 @@ class LoginWithEmailController extends GetxController
                 WhatsAppCallingConfig.flushPendingVoipToken();
               }
             }
+            // Mic/notification permission dialogs — deferred from app
+            // startup until the user has actually logged in.
+            requestRuntimePermissions();
             Get.offAllNamed(AppRoute.dashboard);
           });
         });

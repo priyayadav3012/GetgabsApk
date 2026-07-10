@@ -17,6 +17,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide navigator;
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
+import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'package:http/http.dart' as http;
@@ -594,7 +595,11 @@ class WhatsAppCallingService {
       final params = CallKitParams(
         id: callKitId,
         nameCaller: displayNameShort,
-        appName: 'GetGabs',
+        appName: AppTheme.currentFlavor == 'messagedly'
+            ? 'Messagedly'
+            : AppTheme.currentFlavor == 'scalewiz'
+                ? 'Scalewiz'
+                : 'GetGabs',
         avatar: avatarUrl,
         handle: callerNumber,
         type: 0,
@@ -1320,6 +1325,24 @@ class IncomingCallCard extends StatelessWidget {
     final initials = _getInitials(callerName);
     final formattedNumber = _formatPhoneDisplay(callerNumber);
 
+    // ✅ Per-flavor branding for the incoming-call header — was hardcoded to
+    // GetGabs green/"G"/"GetGabs Audio Calling" for all three apps.
+    final Color brandColor = AppTheme.currentFlavor == 'messagedly'
+        ? const Color(0xff4242D4)
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? const Color(0xff0E7C74)
+            : const Color(0xFF034737);
+    final String brandLetter = AppTheme.currentFlavor == 'messagedly'
+        ? 'M'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'S'
+            : 'G';
+    final String brandLabel = AppTheme.currentFlavor == 'messagedly'
+        ? 'Messagedly Audio Calling'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'Scalewiz Audio Calling'
+            : 'GetGabs Audio Calling';
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
@@ -1338,9 +1361,9 @@ class IncomingCallCard extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFF034737),
-              borderRadius: BorderRadius.only(
+            decoration: BoxDecoration(
+              color: brandColor,
+              borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(20),
                 topRight: Radius.circular(20),
               ),
@@ -1354,17 +1377,17 @@ class IncomingCallCard extends StatelessWidget {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(6)),
-                  child: const Center(
-                    child: Text('G',
+                  child: Center(
+                    child: Text(brandLetter,
                         style: TextStyle(
-                            color: Color(0xFF034737),
+                            color: brandColor,
                             fontSize: 16,
                             fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('GetGabs Audio Calling',
-                    style: TextStyle(
+                Text(brandLabel,
+                    style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -1474,7 +1497,7 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   String _status = 'Connecting...';
   Duration _duration = Duration.zero;
   Timer? _timer;
@@ -1487,22 +1510,85 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _waveController =
         AnimationController(duration: const Duration(seconds: 2), vsync: this)
           ..repeat();
 
-    // ✅ iOS: postFrameCallback use karo + foreground check
-    // ✅ Android: direct answerCall
-    if (Platform.isIOS) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
-            !widget.callingService.callAccepted) {
-          await _answerCall();
-        }
-      });
-    } else {
-      _answerCall();
+    _attachCallCallbacks();
+    _syncServiceState();
+
+    // Answer the incoming call once the UI is ready and the app is
+    // in the foreground on iOS. If the app is still inactive after the first
+    // frame, didChangeAppLifecycleState will retry when resumed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryAnswerIfNeeded();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _tryAnswerIfNeeded();
     }
+  }
+
+  void _attachCallCallbacks() {
+    widget.callingService.onStatusChange = (s) {
+      if (!mounted || _isEnded) return;
+      final statusLower = s.toLowerCase();
+      if (statusLower.contains('connected')) {
+        setState(() {
+          _isConnected = true;
+          _status = 'Connected';
+        });
+        _startTimer();
+      } else if (statusLower.contains('accepted')) {
+        setState(() {});
+      } else if (statusLower.contains('ended') ||
+          statusLower.contains('failed') ||
+          statusLower.contains('terminated') ||
+          statusLower.contains('declined')) {
+        _handleCallEnded(s);
+      } else {
+        setState(() => _status = s);
+      }
+    };
+
+    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
+    widget.callingService.onError = (e) {
+      if (mounted && !_isEnded) _handleCallEnded(e);
+    };
+  }
+
+  void _syncServiceState() {
+    if (!widget.callingService.callAccepted) return;
+
+    final alreadyConnected = widget.callingService.callStartTime != null ||
+        widget.callingService.callStatus.toLowerCase().contains('connected');
+
+    if (alreadyConnected) {
+      setState(() {
+        _isConnected = true;
+        _status = 'Connected';
+      });
+      _startTimer();
+    } else {
+      setState(() {
+        _status = widget.callingService.callStatus.isNotEmpty
+            ? widget.callingService.callStatus
+            : 'Connecting...';
+      });
+    }
+  }
+
+  void _tryAnswerIfNeeded() {
+    if (widget.callingService.callAccepted) return;
+    if (Platform.isIOS &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    _answerCall();
   }
 
   String _getInitials(String name, String number) {
@@ -1558,31 +1644,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   }
 
   Future<void> _answerCall() async {
-    widget.callingService.onStatusChange = (s) {
-      if (!mounted || _isEnded) return;
-      final statusLower = s.toLowerCase();
-      if (statusLower.contains('connected')) {
-        setState(() {
-          _isConnected = true;
-          _status = 'Connected';
-        });
-        _startTimer();
-      } else if (statusLower.contains('accepted')) {
-        setState(() {});
-      } else if (statusLower.contains('ended') ||
-          statusLower.contains('failed') ||
-          statusLower.contains('terminated') ||
-          statusLower.contains('declined')) {
-        _handleCallEnded(s);
-      } else {
-        setState(() => _status = s);
-      }
-    };
-    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
-    widget.callingService.onError = (e) {
-      if (mounted && !_isEnded) _handleCallEnded(e);
-    };
-
     try {
       if (widget.pendingSdp == null || widget.pendingCallId == null) {
         _handleCallEnded('Call expired');
@@ -1614,6 +1675,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     WhatsAppCallingConfig.notifyCallScreenClosed();
     _waveController.dispose();
     _timer?.cancel();

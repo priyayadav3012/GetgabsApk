@@ -13,7 +13,9 @@ import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:get/get.dart';
+import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:getgabs/firebase_options.dart';
@@ -41,7 +43,20 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
     debugPrint(isAppInForeground ? '🟢 FOREGROUND' : '🔴 BACKGROUND');
 
     if (state == AppLifecycleState.resumed) {
-      Future.delayed(const Duration(milliseconds: 100), () {
+      Future.delayed(const Duration(milliseconds: 100), () async {
+        // A chat message arrived via FCM while backgrounded (see
+        // _firebaseMessagingBackgroundHandler) — refresh the chat lists now
+        // that we're back in the foreground so the customer shows as unread.
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getBool('has_new_messages_to_refresh') ?? false) {
+          await prefs.setBool('has_new_messages_to_refresh', false);
+          if (Get.isRegistered<DashboardController>()) {
+            final dc = Get.find<DashboardController>();
+            dc.refreshActiveChatList(increment: 'replace');
+            dc.refreshRollingOverChatList(increment: 'replace');
+          }
+        }
+
         // Primary path: open pending incoming call screen (new call arriving).
         WhatsAppCallingConfig.handlePendingCallNavigation();
 
@@ -140,7 +155,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       id: safeId,
       nameCaller: displayNameShort,
       handle: callerNumber,
-      appName: 'GetGabs',
+      appName: AppTheme.currentFlavor == 'messagedly'
+          ? 'Messagedly'
+          : AppTheme.currentFlavor == 'scalewiz'
+              ? 'Scalewiz'
+              : 'GetGabs',
       avatar: avatarUrl,
       type: 0,
       duration: 60000,
@@ -213,25 +232,57 @@ Future<void> _initGlobalCalling() async {
 }
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
 
-  // Request microphone permission immediately on first launch so the system
-  // dialog never appears mid-call-setup. On subsequent launches the OS returns
-  // instantly (permission already cached), so this adds negligible startup cost.
-  await Permission.microphone.request();
+  // Hold the native splash open past Flutter's first frame so we control
+  // exactly when it disappears (see the 1s cap below), instead of it being
+  // auto-dismissed the instant runApp() paints.
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
+  // Configure EasyLoading once at startup so every showSuccess/showError
+  // call app-wide (not just the ones reachable after visiting login) gets
+  // the themed success/error look from the very first use.
+  configLoading();
 
   // ✅ Lifecycle observer — dono platforms ke liye
   WidgetsBinding.instance.addObserver(AppLifecycleObserver());
 
+  // Firebase + calling setup: fast, no user-facing dialogs, and required
+  // before the first frame — SplashScreenController.onInit() reads the FCM
+  // token immediately on build, so Firebase must already be initialized,
+  // and call listeners must already be wired up before the UI can react to
+  // an incoming call.
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  WhatsAppCallingConfig.setupCallKitEvents();
+  await _initGlobalCalling();
+  WhatsAppCallingConfig.initMethodChannel();
 
+  runApp(const MyApp());
+
+  // Cap the native splash to ~1s regardless of how long the rest of startup
+  // takes. Permission dialogs (mic/notification) are no longer requested
+  // here — they're deferred until after login, see requestRuntimePermissions().
+  Future.delayed(const Duration(seconds: 1), FlutterNativeSplash.remove);
+}
+
+// ============================================
+// RUNTIME PERMISSIONS — requested after login
+// ============================================
+// Mic/notification/CallKit permission dialogs are user-facing and can wait
+// on the user indefinitely, so they're not requested at app startup (that
+// used to delay/gate the splash screen). Called once the user is actually
+// signed in — from LoginWithEmailController.loignApi() on fresh login, and
+// from SplashScreenController.authentication() on auto-login — since by
+// then the user has context for why the app needs them, and calling/
+// notifications are only relevant once they're logged in anyway.
+Future<void> requestRuntimePermissions() async {
+  await Permission.microphone.request();
   await FirebaseMessaging.instance.requestPermission();
 
   if (Platform.isIOS) {
     final apnsToken = await FirebaseMessaging.instance.getAPNSToken();
-    print('🔑 Startup APNS token: $apnsToken');
+    print('🔑 APNS token: $apnsToken');
   }
 
   // ✅ CallKit notification permission
@@ -241,14 +292,6 @@ Future<void> main() async {
 
   // ✅ Android: full intent permission (lock screen pe call dikhane ke liye)
   await FlutterCallkitIncoming.requestFullIntentPermission();
-
-  // ✅ Android file mein tha — CallKit events setup
-  WhatsAppCallingConfig.setupCallKitEvents();
-
-  await _initGlobalCalling();
-  WhatsAppCallingConfig.initMethodChannel();
-
-  runApp(const MyApp());
 }
 
 // ============================================
@@ -381,7 +424,11 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return GetMaterialApp(
-      title: 'GetGabs',
+      title: AppTheme.currentFlavor == 'messagedly'
+          ? 'Messagedly'
+          : AppTheme.currentFlavor == 'scalewiz'
+              ? 'Scalewiz'
+              : 'GetGabs',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
       debugShowCheckedModeBanner: false,
       locale: const Locale('en', 'US'),
@@ -416,7 +463,7 @@ class _MyAppState extends State<MyApp> {
 // ============================================
 void configLoading() {
   EasyLoading.instance
-    ..displayDuration = const Duration(milliseconds: 2000)
+    ..displayDuration = const Duration(milliseconds: 2200)
     ..loadingStyle = EasyLoadingStyle.custom
     ..indicatorType = EasyLoadingIndicatorType.dualRing
     ..backgroundColor = AppTheme.appThemeColor
@@ -425,7 +472,51 @@ void configLoading() {
     ..maskColor = Colors.white
     ..textStyle = const TextStyle(
         fontSize: 16.0, color: Colors.white, fontWeight: FontWeight.w500)
+    ..animationStyle = EasyLoadingAnimationStyle.scale
+    ..animationDuration = const Duration(milliseconds: 280)
+    ..successWidget = const _EasyLoadingStatusIcon(
+      icon: Icons.check_rounded,
+      color: Color(0xFF2E7D32),
+    )
+    ..errorWidget = const _EasyLoadingStatusIcon(
+      icon: Icons.close_rounded,
+      color: Color(0xFFD32F2F),
+    )
+    ..infoWidget = const _EasyLoadingStatusIcon(
+      icon: Icons.info_rounded,
+      color: Color(0xFF1976D2),
+    )
     ..dismissOnTap = false;
+}
+
+/// Success/error/info icon for EasyLoading toasts: a white badge (for
+/// contrast against the brand-colored toast background) holding a
+/// colored icon, with a bouncy scale-in so it reads as an intentional
+/// result rather than a generic spinner replacement.
+class _EasyLoadingStatusIcon extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const _EasyLoadingStatusIcon({required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.elasticOut,
+      builder: (context, value, child) =>
+          Transform.scale(scale: value, child: child),
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: color, size: 34),
+      ),
+    );
+  }
 }
 
 void showLoading() {

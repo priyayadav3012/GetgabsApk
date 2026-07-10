@@ -22,10 +22,18 @@ import 'package:url_launcher/url_launcher.dart';
 
 class ApiEndPoints {
   static const String baseUrl = 'https://app.getgabs.com/v2/flutterapplication/';
+  static const String _scalewizLoginBaseUrl = 'https://app.getgabs.com/v3/flutterapplication/';
   static _AuthEndPoints authEndpoints = _AuthEndPoints();
   static _DashboardEndPoints dashboardEndPoints = _DashboardEndPoints();
   static _ChatEndPoints chatEndPoints = _ChatEndPoints();
   static _MoreScreenEndPoints moreScreenEndPoints = _MoreScreenEndPoints();
+  static _PartnersEndPoints partnersEndPoints = _PartnersEndPoints();
+
+  // ✅ Scalewiz ka login endpoint v3 pe hai, baaki sab endpoints v2 pe hi rahenge
+  static String get loginBaseUrl =>
+      LoginWithEmailController.currentFlavor == 'scalewiz'
+          ? _scalewizLoginBaseUrl
+          : baseUrl;
 }
 
 class _AuthEndPoints {
@@ -53,6 +61,19 @@ class _ChatEndPoints {
 
 class _MoreScreenEndPoints {
   final String logoutUrl = "logout";
+}
+
+class _PartnersEndPoints {
+  // ✅ Full absolute URLs — live under /partners/, not under
+  // ApiEndPoints.baseUrl's v2/flutterapplication/ path like the other endpoints.
+  // This namespace authenticates via a short-lived bearer/session token
+  // (fetched from getSessionToken using the WhatsApp Business api_key) and
+  // expects multipart/form-data bodies (confirmed via curl --form examples),
+  // not JSON or plain x-www-form-urlencoded.
+  final String getSessionTokenUrl =
+      "https://app.getgabs.com/partners/getSessionToken";
+  final String addCustomerUrl =
+      "https://app.getgabs.com/partners/managechat/chat/add-customer";
 }
 
 // ============================================
@@ -148,6 +169,10 @@ class WhatsAppCallingConfig {
   // ============================================
   static bool _checkIsMessagedly() {
     return LoginWithEmailController.currentFlavor == 'messagedly';
+  }
+
+  static bool _checkIsScalewiz() {
+    return LoginWithEmailController.currentFlavor == 'scalewiz';
   }
 
   // ============================================
@@ -659,12 +684,12 @@ class WhatsAppCallingConfig {
 
       // ✅ v3.0.0 — sealed class pattern use karo (Event enum gone)
       if (event is CallEventActionCallAccept) {
-        final callId = event.id;
+        // final callId = event.id;
         final prefs = await SharedPreferences.getInstance();
         final sessionStr = prefs.getString('pending_call_session') ?? '';
         final callerName = prefs.getString('pending_caller_name') ?? '';
         final callerNumber = prefs.getString('pending_caller_number') ?? '';
-        final savedCallId = prefs.getString('pending_call_id') ?? callId;
+        // final savedCallId = prefs.getString('pending_call_id') ?? callId;
 
         debugPrint('📞 Accept — session empty: ${sessionStr.isEmpty} | number: $callerNumber');
 
@@ -695,14 +720,18 @@ class WhatsAppCallingConfig {
             ? callerName
             : callerNumber.replaceAll('+', '').replaceAll(' ', '');
 
-        final String avatarBgColor = _checkIsMessagedly() ? '4242D4' : '075E54';
+        final String avatarBgColor = _checkIsMessagedly()
+            ? '4242D4'
+            : _checkIsScalewiz()
+                ? '0E7C74'
+                : '075E54';
         final avatar =
             'https://ui-avatars.com/api/?name=${Uri.encodeComponent(displayForAvatar)}&background=$avatarBgColor&color=fff&size=200&rounded=true&bold=true';
 
         await initializeCallListener();
         final service = GlobalCallListenerService.instance.service;
         if (service != null) {
-          service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
+          // service.setPendingCall(callId: savedCallId, sdp: sdpOffer);
           service.currentPhoneNumber = callerNumber;
           service.currentCallerName = callerName;
           service.isOutgoingCall = false;
@@ -739,19 +768,19 @@ class WhatsAppCallingConfig {
 
       } else if (event is CallEventActionCallDecline) {
         debugPrint('📵 Call declined from CallKit');
-        final callId = event.id;
+        // final callId = event.id;
         final prefs2 = await SharedPreferences.getInstance();
-        final declineCallId = prefs2.getString('pending_call_id') ?? callId;
+        // final declineCallId = prefs2.getString('pending_call_id') ?? callId;
         await _clearCallPrefs(prefs2);
 
         final svc = GlobalCallListenerService.instance.service;
-        if (svc != null && declineCallId.isNotEmpty) {
-          await svc.terminateCall();
-        } else {
-          await _terminateCallViaHttp(declineCallId);
-        }
+        // if (svc != null && declineCallId.isNotEmpty) {
+        //   await svc.terminateCall();
+        // } else {
+        //   await _terminateCallViaHttp(declineCallId);
+        // }
 
-        try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
+        // try { await FlutterCallkitIncoming.endCall(callId); } catch (e) {}
 
       } else if (event is CallEventActionCallTimeout) {
         debugPrint('⏰ Call timeout');
@@ -875,7 +904,9 @@ class WhatsAppCallingConfig {
     try {
       final Color loaderColor = _checkIsMessagedly()
           ? const Color(0xff4242D4)
-          : const Color(0xFF00A884);
+          : _checkIsScalewiz()
+              ? const Color(0xff0E7C74)
+              : const Color(0xFF00A884);
 
       Get.dialog(
         Center(child: CircularProgressIndicator(color: loaderColor)),
@@ -1018,11 +1049,22 @@ class WhatsAppCallingConfig {
   static void showCallOptions(
       BuildContext context, String phoneNumber, String contactName) {
     final bool isMessagedly = _checkIsMessagedly();
-    final String callOptionTitle =
-        isMessagedly ? 'Messagedly Voice Call' : 'GetGabs Voice Call';
-    final Color dynamicBrandColor =
-        isMessagedly ? const Color(0xff4242D4) : const Color(0xFF00A884);
-    final String avatarBgHex = isMessagedly ? '4242D4' : '075E54';
+    final bool isScalewiz = _checkIsScalewiz();
+    final String callOptionTitle = isMessagedly
+        ? 'Messagedly Voice Call'
+        : isScalewiz
+            ? 'Scalewiz Voice Call'
+            : 'GetGabs Voice Call';
+    final Color dynamicBrandColor = isMessagedly
+        ? const Color(0xff4242D4)
+        : isScalewiz
+            ? const Color(0xff0E7C74)
+            : const Color(0xFF00A884);
+    final String avatarBgHex = isMessagedly
+        ? '4242D4'
+        : isScalewiz
+            ? '0E7C74'
+            : '075E54';
 
     Get.bottomSheet(
       SafeArea(

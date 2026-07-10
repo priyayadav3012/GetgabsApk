@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:getgabs/domain/network/network_api_services.dart';
 import 'package:http/http.dart' as http;
 
@@ -96,6 +99,42 @@ Future<dynamic> toggleHandoffService(var data, {var headers}) async {
             ApiEndPoints.chatEndPoints.toggleHandoffUrl,
         headers: headers);
     return response;
+  }
+
+  // ✅ /partners/ endpoints are multipart/form-data (confirmed via curl
+  // --form examples), not JSON — calling http directly via MultipartRequest
+  // instead of NetworkApiServices.postApi(), which only sends JSON and whose
+  // returnResponse() throws a bare InvalidUrlException on 400/302, discarding
+  // response.body and hiding the backend's actual validation message.
+  Future<dynamic> _postPartnersMultipart(
+      String url, Map<String, String> fields) async {
+    final request = http.MultipartRequest('POST', Uri.parse(url))
+      ..fields.addAll(fields);
+    final streamedResponse = await request.send().timeout(const Duration(seconds: 60));
+    final response = await http.Response.fromStream(streamedResponse);
+
+    debugPrint('📡 $url → [${response.statusCode}] ${response.body}');
+
+    try {
+      return jsonDecode(response.body);
+    } catch (_) {
+      return {
+        'status': false,
+        'message': 'Server error (${response.statusCode}): ${response.body}'
+      };
+    }
+  }
+
+  // Exchanges the WhatsApp Business api_key for a short-lived bearer/session
+  // token used to authenticate every other /partners/ call.
+  Future<dynamic> getSessionTokenService(Map<String, String> fields) async {
+    return _postPartnersMultipart(
+        ApiEndPoints.partnersEndPoints.getSessionTokenUrl, fields);
+  }
+
+  Future<dynamic> addCustomerService(Map<String, String> fields) async {
+    return _postPartnersMultipart(
+        ApiEndPoints.partnersEndPoints.addCustomerUrl, fields);
   }
 }
 // moved shortMessageListService inside ChatServices to use _apiService

@@ -17,31 +17,52 @@ class _C {
   /// Check karta hai ki current flavor 'messagedly' hai ya nahi
   static bool get isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
 
+  /// Check karta hai ki current flavor 'scalewiz' hai ya nahi
+  static bool get isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+
   // Base background dono apps mein same rahega
   static const bg = Color(0xFF0A0F0D);
-  
+
   // Placeholder bhi dono ke liye same rahega
   static const placeholder = Color(0xFF3A5248);
 
   // ── Dynamic Color Switching based on Flavor ──
-  
-  static Color get card => 
-      isMessagedly ? const Color(0xFF162019) : const Color(0xFF162019); // Agar messagedly ke liye card color badalna ho toh yahan change karein
 
-  static Color get green => 
-      isMessagedly ? const Color.fromARGB(255, 150, 107, 219) : const Color(0xFF25D366);
+  static Color get card => isMessagedly
+      ? const Color(0xFF162019)
+      : isScalewiz
+          ? const Color(0xFF0F1E1C)
+          : const Color(0xFF162019); // Agar messagedly ke liye card color badalna ho toh yahan change karein
 
-  static Color get greenDark => 
-      isMessagedly ? const Color.fromARGB(255, 125, 139, 216) : const Color(0xFF128C7E);
+  static Color get green => isMessagedly
+      ? const Color.fromARGB(255, 150, 107, 219)
+      : isScalewiz
+          ? const Color(0xff17A398)
+          : const Color(0xFF25D366);
 
-  static Color get border => 
-      isMessagedly ? const Color.fromARGB(33, 17, 17, 17) : const Color(0x2225D366);
+  static Color get greenDark => isMessagedly
+      ? const Color.fromARGB(255, 125, 139, 216)
+      : isScalewiz
+          ? const Color(0xff0E7C74)
+          : const Color(0xFF128C7E);
 
-  static Color get text => 
-      isMessagedly ? const Color.fromARGB(255, 229, 231, 248) : const Color(0xFFF0FAF4);
+  static Color get border => isMessagedly
+      ? const Color.fromARGB(33, 17, 17, 17)
+      : isScalewiz
+          ? const Color(0x2217A398)
+          : const Color(0x2225D366);
 
-  static Color get muted => 
-      isMessagedly ? const Color.fromARGB(255, 164, 135, 245) : const Color(0xFF6B8F79);
+  static Color get text => isMessagedly
+      ? const Color.fromARGB(255, 229, 231, 248)
+      : isScalewiz
+          ? const Color(0xFFE9F7F4)
+          : const Color(0xFFF0FAF4);
+
+  static Color get muted => isMessagedly
+      ? const Color.fromARGB(255, 164, 135, 245)
+      : isScalewiz
+          ? const Color(0xff5FA79D)
+          : const Color(0xFF6B8F79);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,10 +103,12 @@ class LoginWithEmailScreen extends StatelessWidget {
 
                 SizedBox(height: hp * 0.018),
 
-                // Badge
-                _Anim(opacity: c.opacity(0.00, 0.40),
-                      offset:  c.offset(0.00, 0.40, start: const Offset(0, -0.22)),
-                      child: const Center(child: _Badge())),
+                // Badge — Scalewiz is not a Meta Official Partner, so this is
+                // hidden for that flavor only.
+                if (!_C.isScalewiz)
+                  _Anim(opacity: c.opacity(0.00, 0.40),
+                        offset:  c.offset(0.00, 0.40, start: const Offset(0, -0.22)),
+                        child: const Center(child: _Badge())),
 
                 // SizedBox(height: hp * 0.030),
 
