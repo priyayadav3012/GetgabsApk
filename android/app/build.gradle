@@ -22,6 +22,18 @@ def flutterVersionName = localProperties.getProperty("flutter.versionName")
 if (flutterVersionName == null) {
     flutterVersionName = "1.0"
 }
+
+// Per-flavor version overrides. Each brand ships to its own store listing and
+// advances its own release history, so its version must not be tied to the others.
+// Set brand.versionName / brand.versionCode in local.properties to bump one flavor
+// independently; falls back to the shared flutter.versionName/versionCode otherwise.
+def getgabsVersionName = localProperties.getProperty("getgabs.versionName") ?: flutterVersionName
+def getgabsVersionCode = (localProperties.getProperty("getgabs.versionCode") ?: flutterVersionCode).toInteger()
+def messagedlyVersionName = localProperties.getProperty("messagedly.versionName") ?: flutterVersionName
+def messagedlyVersionCode = (localProperties.getProperty("messagedly.versionCode") ?: flutterVersionCode).toInteger()
+def scalewizVersionName = localProperties.getProperty("scalewiz.versionName") ?: flutterVersionName
+def scalewizVersionCode = (localProperties.getProperty("scalewiz.versionCode") ?: flutterVersionCode).toInteger()
+
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
@@ -74,11 +86,22 @@ flavorDimensions = ["brand"]
             dimension = "brand"
             applicationId = "com.getgabs.getgabs"
             resValue "string", "app_name", "GetGabs"
+            versionName = getgabsVersionName
+            versionCode = getgabsVersionCode
         }
         messagedly {
+                dimension = "brand"
+                applicationId = "com.messagedly.messagedly"
+                resValue "string", "app_name", "Messagedly"
+                versionName = messagedlyVersionName
+                versionCode = messagedlyVersionCode
+        }
+        scalewiz{
             dimension = "brand"
-            applicationId = "com.messagedly.messagedly"
-            resValue "string", "app_name", "Messagedly"
+            applicationId = "com.scalewiz.scalewiz"
+            resValue "string", "app_name", "Scalewiz"
+            versionName = scalewizVersionName
+            versionCode = scalewizVersionCode
         }
     }
     signingConfigs {
@@ -109,7 +132,9 @@ configurations.all {
 }
 dependencies {
     // For AGP 7.4+
-    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.5'
+    // For AGP 7.4+
+    // coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
     // For AGP 7.3
     // coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.2.3'
     // For AGP 4.0 to 7.2

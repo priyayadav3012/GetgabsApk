@@ -1,11 +1,10 @@
-import 'dart:async';
-
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:getgabs/routes/app_route.dart';
+import '../../../main.dart';
 
 class SplashScreenController extends GetxController {
   static SplashScreenController get find => Get.find();
@@ -47,9 +46,13 @@ class SplashScreenController extends GetxController {
 
   Future<void> startAnimation() async {
     try {
-      await Future.delayed(const Duration(milliseconds: 500));
-      animate.value = true;
-      await Future.delayed(const Duration(milliseconds: 5000));
+      // Flip immediately (post-frame, not delayed) so the logo starts
+      // fading in on the very first frame instead of sitting on a blank
+      // white Scaffold first.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        animate.value = true;
+      });
+      await Future.delayed(const Duration(milliseconds: 900));
       authentication();
       // Get.toNamed(AppRoute.splash);
     } catch (e) {
@@ -61,22 +64,12 @@ class SplashScreenController extends GetxController {
     var userId = box.read('id');
 
     if (userId != null) {
-      Timer(const Duration(seconds: 1), () {
-        Get.offAllNamed(AppRoute.dashboard);
-      });
+      // Mic/notification permission dialogs — deferred from app startup
+      // until the user is confirmed logged in (auto-login case here).
+      requestRuntimePermissions();
+      Get.offAllNamed(AppRoute.dashboard);
     } else {
-      // if (userId == null) {
-      Timer(const Duration(seconds: 1), () {
-        // Get.offAllNamed(AppRoute.startScreen);
-        Get.offAllNamed(AppRoute.loginWithEmail);
-        //   Get.to(() => LoginWithEamilPage());
-      });
-      // }
-      //  else {
-      //   Timer(const Duration(seconds: 1), () {
-      //     Get.to(() => OtpVerificationPage());
-      //   });
-      // }
+      Get.offAllNamed(AppRoute.loginWithEmail);
     }
   }
 }

@@ -93,25 +93,39 @@ class BaseMessageUi extends StatelessWidget {
                   ),
                   SizedBox(width: mediaQuery.width * 0.01),
                   if (isSentByMe) ...[
-                    if (deliveryStatus?.toLowerCase() == 'sent')
-                      const Icon(Icons.check, size: 14, color: Colors.grey),
-                    if (deliveryStatus?.toLowerCase() == 'delivered')
-                      const Icon(Icons.done_all, size: 14, color: Colors.grey),
-                    if (deliveryStatus?.toLowerCase() == 'read')
-                      const Icon(Icons.done_all, size: 14, color: Colors.blue),
-                    if (deliveryStatus?.toLowerCase() == 'failed') ...[
-                      const Text(
-                        "failed",
-                        style: TextStyle(color: Colors.red),
-                      ),
-                      const Icon(Icons.error, size: 16, color: Colors.red)
-                    ],
-                    if (deliveryStatus?.toLowerCase() == 'sending')
-                      const Icon(Icons.access_time_outlined,
-                          size: 14, color: Colors.grey),
-                    if (deliveryStatus?.toLowerCase() == 'pending')
-                      const Icon(Icons.access_time_outlined,
-                          size: 14, color: Colors.grey),
+                    Builder(builder: (context) {
+                      final status = deliveryStatus.toLowerCase();
+                      switch (status) {
+                        case 'delivered':
+                          return const Icon(Icons.done_all,
+                              size: 14, color: Colors.grey);
+                        case 'read':
+                          return const Icon(Icons.done_all,
+                              size: 14, color: Colors.blue);
+                        case 'failed':
+                          return const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                "failed",
+                                style: TextStyle(color: Colors.red),
+                              ),
+                              Icon(Icons.error, size: 16, color: Colors.red),
+                            ],
+                          );
+                        case 'sending':
+                        case 'pending':
+                          return const Icon(Icons.access_time_outlined,
+                              size: 14, color: Colors.grey);
+                        case 'sent':
+                        default:
+                          // Any status we don't explicitly recognize still
+                          // means the message left the device, so fall back
+                          // to a single tick instead of showing nothing.
+                          return const Icon(Icons.check,
+                              size: 14, color: Colors.grey);
+                      }
+                    }),
                   ],
                 ],
               ), // Text(

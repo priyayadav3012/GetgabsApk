@@ -7,6 +7,7 @@ import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/entities/android_params.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
@@ -16,13 +17,28 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide navigator;
 import 'package:get/get.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
-import 'package:getgabs/main.dart';
+import 'package:getgabs/ui/themes/themes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import 'package:vibration/vibration.dart';
+
+final _uuidFactory = Uuid();
+
+String normalizeCallKitId(String? id) {
+  if (id == null || id.trim().isEmpty) return _uuidFactory.v4();
+
+  final normalized = id.trim().toLowerCase();
+  final uuidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  if (uuidRegex.hasMatch(normalized)) return normalized;
+
+  return _uuidFactory.v5(Uuid.NAMESPACE_URL, normalized).toLowerCase();
+}
 
 class WhatsAppCallingService {
   final int userId;
@@ -36,6 +52,20 @@ class WhatsAppCallingService {
   RTCPeerConnection? peerConnection;
   MediaStream? localStream;
   MediaStream? remoteStream;
+
+  // #changedWithJClaude — ICE candidate buffer: candidates generated before the socket
+  // reconnects (background → foreground transition) are queued here and flushed the
+  // moment onConnect fires. Without this they were silently dropped and WebRTC could
+  // never establish a peer connection even though SDP exchange succeeded via HTTP.
+  final List<Map<String, dynamic>> _bufferedIceCandidates = [];
+
+  // Buffer for REMOTE ICE candidates (from caller) that arrive via socket BEFORE
+  // _createPeerConnection() runs. On first call, the socket may already be delivering
+  // 'ice_candidate' events while peerConnection is still null; if we drop them here
+  // the callee never learns the caller's ICE addresses and ICE never completes.
+  // Drained in answerCall() after setRemoteDescription() so the peer connection is
+  // ready to accept them. Cleared in cleanupCall() for next call.
+  final List<RTCIceCandidate> _pendingRemoteCandidates = [];
 
   // ✅ iOS ke liye valid UUID store karna zaroori hai
   String? currentCallKitId;
@@ -63,11 +93,10 @@ class WhatsAppCallingService {
   bool _hasActivePendingCall = false;
 
   DateTime? callStartTime;
+  bool _callStartLogged = false;
   String? currentPhoneNumber;
   String? currentCallerName;
   bool isOutgoingCall = false;
-
-  final _uuid = Uuid();
 
   Timer? _callTimeoutTimer;
   static const int callTimeoutSeconds = 60;
@@ -81,32 +110,34 @@ class WhatsAppCallingService {
   static Future<String?> Function(String phoneNumber)? contactNameLookup;
 
   static const String socketUrl = 'https://calling.getgabs.com';
-  static const String apiBaseUrl = 'https://app.getgabs.com/v2/flutterapplication';
+  static const String apiBaseUrl =
+      'https://app.getgabs.com/v2/flutterapplication';
 
   static const Map<String, dynamic> iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
       {'urls': 'stun:stun2.l.google.com:19302'},
+      {'urls': 'stun:stun.relay.metered.ca:80'},
       {
         'urls': 'turn:global.relay.metered.ca:80',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turn:global.relay.metered.ca:80?transport=tcp',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turn:global.relay.metered.ca:443',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
       {
         'urls': 'turns:global.relay.metered.ca:443?transport=tcp',
-        'username': '1ae992eb6027f495944eb9e2',
-        'credential': 'j6SXfDQYxnZwNQzJ',
+        'username': '8033d76c7cc0cf98cfd739b2',
+        'credential': 'jlae48TwFJY4X8Lq',
       },
     ],
     'iceCandidatePoolSize': 10,
@@ -127,6 +158,8 @@ class WhatsAppCallingService {
     _pendingSdp = null;
     _pendingCallId = null;
     _hasActivePendingCall = false;
+    _bufferedIceCandidates.clear();
+    _pendingRemoteCandidates.clear();
   }
 
   void _cancelCallTimeout() {
@@ -161,16 +194,7 @@ class WhatsAppCallingService {
   // HELPER — iOS ke liye valid UUID banana
   // ============================================
   String _getValidCallKitId(String? id) {
-    if (id == null || id.isEmpty) return _uuid.v4();
-
-    final uuidRegex = RegExp(
-      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-    );
-
-    if (uuidRegex.hasMatch(id)) return id;
-
-    // iOS ke liye string ko stable UUID mein convert karo
-    return _uuid.v5(Uuid.NAMESPACE_URL, id);
+    return normalizeCallKitId(id);
   }
 
   String _formatPhoneNumber(String phone) {
@@ -200,7 +224,8 @@ class WhatsAppCallingService {
     final permissions = [Permission.microphone];
     Map<Permission, PermissionStatus> statuses = await permissions.request();
     if (statuses[Permission.microphone] != PermissionStatus.granted) {
-      throw Exception('Microphone permission denied. Please allow microphone access in Settings.');
+      throw Exception(
+          'Microphone permission denied. Please allow microphone access in Settings.');
     }
     debugPrint('✅ Permissions granted');
     return true;
@@ -210,7 +235,7 @@ class WhatsAppCallingService {
     socket = IO.io(
       socketUrl,
       IO.OptionBuilder()
-          .setTransports(['polling']) // ✅ polling reliable fallback
+          .setTransports(['polling'])
           .setAuth({'userId': userId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
@@ -228,8 +253,14 @@ class WhatsAppCallingService {
       developer.log('📞 ========== INCOMING CALL ==========');
       developer.log('📞 Data: $data');
 
-      if (_callAccepted) {
-        debugPrint('⚠️ Call already accepted — ignoring duplicate socket event');
+      // On iOS: also block if _hasActivePendingCall is true.
+      // This catches the race window where the socket reconnects and the server
+      // replays whatsapp_call_incoming BEFORE answerCall() has set _callAccepted = true.
+      // On Android: socket whatsapp_call_incoming IS the primary call trigger,
+      // so only _callAccepted blocks — _hasActivePendingCall must not block it.
+      if (_callAccepted || (Platform.isIOS && _hasActivePendingCall)) {
+        debugPrint(
+            '⚠️ Call already accepted/pending — ignoring duplicate socket event');
         return;
       }
 
@@ -249,7 +280,14 @@ class WhatsAppCallingService {
       }
 
       if (callerName.isEmpty) {
-        final nameFields = ['callerName', 'caller_name', 'name', 'displayName', 'pushName', 'notify'];
+        final nameFields = [
+          'callerName',
+          'caller_name',
+          'name',
+          'displayName',
+          'pushName',
+          'notify'
+        ];
         for (String field in nameFields) {
           if (data[field] != null && data[field].toString().trim().isNotEmpty) {
             callerName = data[field].toString().trim();
@@ -296,6 +334,37 @@ class WhatsAppCallingService {
 
       if (onIncomingCall != null) {
         onIncomingCall!(callData);
+      } else if (isGlobalListener && Platform.isIOS) {
+        // iOS: VoIP push (PushKit) owns the CallKit UI — skip _showCallKitForIncoming
+        // to avoid racing CallManager's CXProvider. But still persist the call data
+        // to SharedPreferences here, because the VoIP push payload typically does not
+        // include the SDP/session. onNativeCallAnswered reads pending_call_session to
+        // get the SDP; without this write it fails with "session missing".
+        final sdpOffer = callData['sdpOffer']?.toString() ?? _pendingSdp ?? '';
+        final callKitId =
+            _getValidCallKitId(callData['callId']?.toString() ?? '');
+        currentCallKitId = callKitId;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+            'pending_call_id', callData['callId']?.toString() ?? '');
+        await prefs.setString('pending_callkit_id', callKitId);
+        await prefs.setString(
+            'pending_caller_name', callData['callerName']?.toString() ?? '');
+        await prefs.setString(
+            'pending_caller_number', callData['from']?.toString() ?? '');
+        // Only write session when SDP is non-empty. An empty SDP produces a
+        // valid JSON string that passes the sessionStr.isEmpty check in
+        // onNativeCallAnswered, causing setRemoteDescription to fail silently.
+        if (sdpOffer.isNotEmpty) {
+          final sessionJson = jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'});
+          await prefs.setString('pending_call_session', sessionJson);
+          // Unblock onNativeCallAnswered if it arrived before this write finished
+          // (background: socket reconnected after user already accepted the call).
+          WhatsAppCallingConfig.notifySessionAvailable(sessionJson);
+          debugPrint('✅ iOS: call data persisted from socket — VoIP push handles UI');
+        } else {
+          debugPrint('⚠️ iOS socket: SDP empty — skipping session write, onNativeCallAnswered will wait via Completer');
+        }
       } else if (isGlobalListener) {
         await _showCallKitForIncoming(callData);
       } else {
@@ -310,7 +379,8 @@ class WhatsAppCallingService {
       if (peerConnection != null && data['session']?['sdp'] != null) {
         try {
           await peerConnection!.setRemoteDescription(
-            RTCSessionDescription(data['session']['sdp'], data['session']['type'] ?? 'answer'),
+            RTCSessionDescription(
+                data['session']['sdp'], data['session']['type'] ?? 'answer'),
           );
         } catch (e) {}
       }
@@ -319,46 +389,64 @@ class WhatsAppCallingService {
     socket!.on('call_accepted', (data) async {
       _cancelCallTimeout();
       _isCallActive = true;
-      callStartTime = DateTime.now();
       _updateStatus('Connected');
       if (peerConnection != null && data['sdp'] != null) {
         try {
-          if (peerConnection!.signalingState == RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
-            await peerConnection!.setRemoteDescription(RTCSessionDescription(data['sdp'], 'answer'));
+          if (peerConnection!.signalingState ==
+              RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+            await peerConnection!.setRemoteDescription(
+                RTCSessionDescription(data['sdp'], 'answer'));
           }
         } catch (e) {}
       }
-      await _logCallStart();
+      // callStartTime and _logCallStart() fire in onIceConnectionState (Connected)
+      // to avoid logging twice — once here and once when ICE confirms media flow.
     });
 
     socket!.on('sdp_answer', (data) async {
       _cancelCallTimeout();
       if (peerConnection != null && data['sdp'] != null) {
         try {
-          await peerConnection!.setRemoteDescription(RTCSessionDescription(data['sdp'], 'answer'));
+          await peerConnection!.setRemoteDescription(
+              RTCSessionDescription(data['sdp'], 'answer'));
         } catch (e) {}
       }
     });
 
     socket!.on('ice_candidate', (data) async {
-      if (peerConnection != null && data['candidate'] != null) {
+      final c = data['candidate'];
+      if (c == null) return;
+      final candidate = RTCIceCandidate(
+        c['candidate'],
+        c['sdpMid'],
+        c['sdpMLineIndex'],
+      );
+      if (peerConnection != null) {
         try {
-          await peerConnection!.addCandidate(RTCIceCandidate(
-            data['candidate']['candidate'],
-            data['candidate']['sdpMid'],
-            data['candidate']['sdpMLineIndex'],
-          ));
+          await peerConnection!.addCandidate(candidate);
         } catch (e) {}
+      } else {
+        // peerConnection doesn't exist yet — buffer and drain in answerCall()
+        // after setRemoteDescription(). Dropping here was the root cause of
+        // first-call failure: the caller sends candidates while the callee is
+        // still setting up (socket arrives before _createPeerConnection runs).
+        _pendingRemoteCandidates.add(candidate);
+        debugPrint(
+            '📦 Remote ICE buffered (no peer connection yet): ${_pendingRemoteCandidates.length}');
       }
     });
 
     socket!.on('whatsapp_call_terminated', (data) async {
       _cancelCallTimeout();
-      String reason = data is Map ? (data['reason'] ?? 'Call ended') : 'Call ended';
+      String reason =
+          data is Map ? (data['reason'] ?? 'Call ended') : 'Call ended';
 
       final terminatedCallId = data is Map ? data['callId']?.toString() : null;
-      if (terminatedCallId != null && currentCallId != null && terminatedCallId != currentCallId) {
-        debugPrint('⚠️ Ignoring stale terminated event for $terminatedCallId (current: $currentCallId)');
+      if (terminatedCallId != null &&
+          currentCallId != null &&
+          terminatedCallId != currentCallId) {
+        debugPrint(
+            '⚠️ Ignoring stale terminated event for $terminatedCallId (current: $currentCallId)');
         return;
       }
 
@@ -366,7 +454,8 @@ class WhatsAppCallingService {
 
       try {
         final prefs = await SharedPreferences.getInstance();
-        final callkitId = currentCallKitId ?? prefs.getString('pending_callkit_id');
+        final callkitId =
+            currentCallKitId ?? prefs.getString('pending_callkit_id');
         if (callkitId != null && callkitId.isNotEmpty) {
           await FlutterCallkitIncoming.endCall(callkitId);
         }
@@ -422,6 +511,23 @@ class WhatsAppCallingService {
     socket!.onConnect((_) {
       debugPrint('✅ Socket connected: ${socket?.id}');
       if (!_isCallActive) _updateStatus('Connected - Ready to call');
+      // Flush ICE candidates buffered during socket reconnect.
+      if (_bufferedIceCandidates.isNotEmpty) {
+        debugPrint(
+            '🚀 Flushing ${_bufferedIceCandidates.length} buffered ICE candidates');
+        for (final payload in _bufferedIceCandidates) {
+          socket!.emit('ice_candidate', payload);
+        }
+        _bufferedIceCandidates.clear();
+      }
+      // Restart the ringing timeout if the socket dropped and reconnected while
+      // an outgoing call is still waiting for an answer. The server may not replay
+      // call_no_answer/call_timeout after a reconnect, so the caller would be
+      // stuck in "Ringing..." indefinitely without a fresh timer.
+      if (isOutgoingCall && _isCallActive && !_callStartLogged && _callTimeoutTimer == null) {
+        debugPrint('⏱️ Restarting call timeout after socket reconnect');
+        _startCallTimeout();
+      }
     });
 
     socket!.onDisconnect((_) {
@@ -429,7 +535,8 @@ class WhatsAppCallingService {
       _cancelCallTimeout();
     });
 
-    socket!.onReconnect((_) => debugPrint('🔄 Socket reconnected: ${socket?.id}'));
+    socket!
+        .onReconnect((_) => debugPrint('🔄 Socket reconnected: ${socket?.id}'));
     socket!.onReconnectError((e) => debugPrint('🔄 Reconnect error: $e'));
     socket!.onError((error) {
       debugPrint('❌ Socket error: $error');
@@ -457,9 +564,8 @@ class WhatsAppCallingService {
 
       // ✅ iOS: valid UUID chahiye CallKit ke liye
       // ✅ Android: original callId theek hai
-      final callKitId = Platform.isIOS
-          ? _getValidCallKitId(originalCallId)
-          : originalCallId;
+      final callKitId =
+          Platform.isIOS ? _getValidCallKitId(originalCallId) : originalCallId;
 
       currentCallKitId = callKitId;
 
@@ -468,10 +574,12 @@ class WhatsAppCallingService {
       await prefs.setString('pending_callkit_id', callKitId);
       await prefs.setString('pending_caller_name', callerName);
       await prefs.setString('pending_caller_number', callerNumber);
-      await prefs.setString(
-        'pending_call_session',
-        jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}),
-      );
+      if (sdpOffer.isNotEmpty) {
+        await prefs.setString(
+          'pending_call_session',
+          jsonEncode({'sdp': sdpOffer, 'sdp_type': 'offer'}),
+        );
+      }
 
       String displayName = callerName.isNotEmpty ? callerName : callerNumber;
       String displayNameShort = displayName.length > 25
@@ -487,7 +595,11 @@ class WhatsAppCallingService {
       final params = CallKitParams(
         id: callKitId,
         nameCaller: displayNameShort,
-        appName: 'GetGabs',
+        appName: AppTheme.currentFlavor == 'messagedly'
+            ? 'Messagedly'
+            : AppTheme.currentFlavor == 'scalewiz'
+                ? 'Scalewiz'
+                : 'GetGabs',
         avatar: avatarUrl,
         handle: callerNumber,
         type: 0,
@@ -507,8 +619,8 @@ class WhatsAppCallingService {
         ios: const IOSParams(
           handleType: 'number',
           supportsVideo: false,
-          audioSessionMode: 'default',
-          supportsGrouping: false,   // ✅ iOS Code 4 prevent karta hai
+          audioSessionMode: 'VideoChat',
+          supportsGrouping: false, // ✅ iOS Code 4 prevent karta hai
           supportsUngrouping: false,
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
@@ -531,7 +643,7 @@ class WhatsAppCallingService {
     if (_isRinging) return;
     _isRinging = true;
     try {
-      if (await Vibration.hasVibrator() ?? false) {
+      if (await Vibration.hasVibrator() == true) {
         Vibration.vibrate(pattern: [0, 1000, 500, 1000, 500, 1000], repeat: 2);
       }
       _ringtonePlayer = AudioPlayer();
@@ -608,49 +720,75 @@ class WhatsAppCallingService {
   }
 
   bool _isCleaningUp = false;
+  // Exposed so the foreground-resume active-call recovery in main.dart can skip
+  // re-pushing the call screen during the multi-second teardown window, where
+  // _isCallActive still reads true but the call is actually ending.
+  bool get isCleaningUp => _isCleaningUp;
 
   Future<void> _handleCallEnded(String reason) async {
     if (_isCleaningUp) return;
     _isCleaningUp = true;
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final callkitId = currentCallKitId ?? prefs.getString('pending_callkit_id');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final callkitId =
+            currentCallKitId ?? prefs.getString('pending_callkit_id');
 
-      if (callkitId != null && callkitId.isNotEmpty) {
-        debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
-        await FlutterCallkitIncoming.endCall(callkitId);
+        if (callkitId != null && callkitId.isNotEmpty) {
+          debugPrint('🧹 Cleaning up CallKit UUID: $callkitId');
+          await FlutterCallkitIncoming.endCall(callkitId);
+          // Also end CallManager's CXProvider call — covers the case where the
+          // VoIP push arrived first and CallManager registered the UUID before
+          // flutter_callkit_incoming could. FlutterCallkitIncoming.endCall only
+          // dismisses its own provider; CallManager's native CallKit UI stays
+          // visible until endCallProgrammatically is called for its UUID.
+          if (Platform.isIOS) {
+            try {
+              await const MethodChannel('com.getgabs/calls')
+                  .invokeMethod('endNativeCall', {'uuid': callkitId});
+              debugPrint('✅ Native CallKit call ended: $callkitId');
+            } catch (e) {
+              debugPrint('⚠️ endNativeCall error: $e');
+            }
+          }
+        }
+
+        await FlutterCallkitIncoming.endAllCalls();
+
+        await prefs.remove('pending_call_id');
+        await prefs.remove('pending_call_session');
+        await prefs.remove('pending_caller_name');
+        await prefs.remove('pending_caller_number');
+        await prefs.remove('pending_callkit_id');
+        await prefs.remove('pending_from_user_id');
+
+        debugPrint('🧹 Pending call prefs cleared');
+      } catch (e) {
+        debugPrint('❌ CallKit cleanup error: $e');
       }
 
-      await FlutterCallkitIncoming.endAllCalls();
-
-      await prefs.remove('pending_call_id');
-      await prefs.remove('pending_call_session');
-      await prefs.remove('pending_caller_name');
-      await prefs.remove('pending_caller_number');
-      await prefs.remove('pending_callkit_id');
-
-      debugPrint('🧹 Pending call prefs cleared');
-    } catch (e) {
-      debugPrint('❌ CallKit cleanup error: $e');
+      await stopRingtone();
+      _callKitShowing = false;
+      _callAccepted = false;
+      _cancelCallTimeout();
+      _clearPendingState();
+      await _logCallEnd();
+      final callEndedCallback = onCallEnded;
+      await cleanupCall(); // nulls onCallEnded and other callbacks
+      callEndedCallback?.call();
+    } finally {
+      _isCleaningUp = false;
     }
-
-    await stopRingtone();
-    _callKitShowing = false;
-    _callAccepted = false;
-    _cancelCallTimeout();
-    _clearPendingState();
-    await _logCallEnd();
-    await cleanupCall();
-    onCallEnded?.call();
-    _isCleaningUp = false;
   }
 
   Future<void> cleanupCall() async {
     debugPrint('🧹 Starting Full Cleanup...');
     _isCallActive = false;
     _callKitShowing = false;
+    _callStartLogged = false;
     _cancelCallTimeout();
+    _clearPendingState();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -659,6 +797,7 @@ class WhatsAppCallingService {
       await prefs.remove('pending_call_session');
       await prefs.remove('pending_caller_name');
       await prefs.remove('pending_caller_number');
+      await prefs.remove('pending_from_user_id');
       debugPrint('✅ SharedPreferences Cleared');
     } catch (e) {
       debugPrint('❌ Pref cleanup error: $e');
@@ -676,6 +815,10 @@ class WhatsAppCallingService {
       debugPrint('⚠️ Stream cleanup warning: $e');
     }
 
+    // Reset speakerphone to earpiece so the audio route doesn't bleed into the
+    // next call or app audio if the user had toggled speaker during this call.
+    try { Helper.setSpeakerphoneOn(false); } catch (_) {}
+
     peerConnection = null;
     localStream = null;
     remoteStream = null;
@@ -685,7 +828,25 @@ class WhatsAppCallingService {
     callStartTime = null;
     currentPhoneNumber = null;
     currentCallerName = null;
+    isOutgoingCall = false;
     _callAccepted = false;
+    onStatusChange = null;
+    onRemoteStream = null;
+    onCallEnded = null;
+    onError = null;
+    onIncomingCall = null;
+
+    // Tell native AppDelegate the call has ended so the isCallActive guard is
+    // lifted and the next incoming VoIP push is handled normally.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallEnded');
+        debugPrint('✅ Native notified: markCallEnded');
+      } catch (e) {
+        debugPrint('⚠️ markCallEnded channel error: $e');
+      }
+    }
 
     _updateStatus('Ready');
   }
@@ -697,9 +858,15 @@ class WhatsAppCallingService {
         await localStream!.dispose();
       }
     } catch (e) {}
-    try { await remoteStream?.dispose(); } catch (e) {}
-    try { await peerConnection?.close(); await peerConnection?.dispose(); } catch (e) {}
+    try {
+      await remoteStream?.dispose();
+    } catch (e) {}
+    try {
+      await peerConnection?.close();
+      await peerConnection?.dispose();
+    } catch (e) {}
 
+    peerConnection = null;
     peerConnection = await createPeerConnection(iceServers);
 
     peerConnection!.onTrack = (event) {
@@ -709,33 +876,93 @@ class WhatsAppCallingService {
       }
     };
 
+    // #changedWithJClaude — buffer ICE candidates when socket is not yet connected.
+    // In background→foreground transitions the socket reconnects after setLocalDescription
+    // already triggers candidate generation, so we queue and flush on onConnect.
     peerConnection!.onIceCandidate = (candidate) {
-      if (currentCallId != null && socket?.connected == true) {
-        socket!.emit('ice_candidate', {
-          'callId': currentCallId,
-          'candidate': {
-            'candidate': candidate.candidate,
-            'sdpMid': candidate.sdpMid,
-            'sdpMLineIndex': candidate.sdpMLineIndex,
-          },
-        });
+      // Diagnose STUN/TURN: log candidate type so failures are visible in console.
+      // host   = local network candidate (always present, no STUN/TURN needed)
+      // srflx  = STUN worked (public IP discovered)
+      // relay  = TURN worked (media will route through relay server)
+      // If you only ever see 'host' and call fails → STUN/TURN is broken.
+      final raw = candidate.candidate ?? '';
+      final type = raw.contains('typ relay')
+          ? '🔁 relay (TURN)'
+          : raw.contains('typ srflx')
+              ? '🌐 srflx (STUN)'
+              : raw.contains('typ host')
+                  ? '🏠 host'
+                  : '❓ unknown';
+      debugPrint(
+          '🧊 ICE candidate: $type | ${raw.split(' ').take(6).join(' ')}');
+
+      if (currentCallId == null) return;
+      final payload = {
+        'callId': currentCallId,
+        'candidate': {
+          'candidate': candidate.candidate,
+          'sdpMid': candidate.sdpMid,
+          'sdpMLineIndex': candidate.sdpMLineIndex,
+        },
+      };
+      if (socket?.connected == true) {
+        socket!.emit('ice_candidate', payload);
+      } else {
+        _bufferedIceCandidates.add(payload);
+        debugPrint(
+            '📦 ICE candidate buffered (socket not ready): ${_bufferedIceCandidates.length} queued');
       }
     };
 
     peerConnection!.onIceConnectionState = (state) {
-      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+      debugPrint('🧊 ICE state → $state');
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         _cancelCallTimeout();
-        _updateStatus('Accepted');
+        if (!_callStartLogged) {
+          _callStartLogged = true;
+          callStartTime = DateTime.now();
+          _logCallStart();
+        }
+        _updateStatus('Connected');
         _isCallActive = true;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        // Temporary loss (background/network blip). Do NOT end the call —
+        // WebRTC will attempt ICE restart automatically. Surface a status
+        // update so the UI shows "Reconnecting..." rather than freezing silently.
+        _updateStatus('Reconnecting...');
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         _cancelCallTimeout();
         onError?.call('Connection failed');
         _handleCallEnded('Connection failed');
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
+        _handleCallEnded('Call ended');
       }
     };
   }
 
+  // Serializes concurrent answer attempts. onNativeCallAnswered answers the
+  // call directly in the background (locked-phone CallKit accept), while
+  // WhatsAppCallingScreen._initCall may call answerCall() again once the app
+  // foregrounds. Both can pass the _callAccepted guard because that flag is
+  // only set after the async _requestPermissions() — without this in-flight
+  // flag two peer connections could be created for the same call.
+  bool _answerCallInProgress = false;
+
   Future<void> answerCall() async {
+    if (_answerCallInProgress) {
+      debugPrint('⚠️ answerCall already in progress — skipping duplicate');
+      return;
+    }
+    _answerCallInProgress = true;
+    try {
+      await _answerCallInternal();
+    } finally {
+      _answerCallInProgress = false;
+    }
+  }
+
+  Future<void> _answerCallInternal() async {
     print("call_answerrrrrrrrrrrrrrrrrrrrrrrrrrrrr");
 
     if (_callAccepted) {
@@ -743,23 +970,50 @@ class WhatsAppCallingService {
       return;
     }
 
-    if (!_hasActivePendingCall || _pendingSdp == null || _pendingCallId == null) {
+    if (!_hasActivePendingCall ||
+        _pendingSdp == null ||
+        _pendingCallId == null) {
       throw Exception('No active incoming call');
+    }
+
+    if (businessApiKey.isEmpty) {
+      throw Exception('WhatsApp Business API key not configured. Please contact your admin.');
     }
 
     String safeSdp = _pendingSdp!;
     String safeCallId = _pendingCallId!;
+
+    // Request permissions BEFORE marking call accepted — if denied the flags
+    // stay false and the service is still clean (no cleanupCall needed).
+    await _requestPermissions();
 
     incomingSdp = safeSdp;
     currentCallId = safeCallId;
     _isCallActive = true;
     _callAccepted = true;
 
-    await _requestPermissions();
+    // Tell native AppDelegate that a call is now active so any delayed VoIP
+    // retry push is blocked from creating a second CallKit incoming-call UI.
+    // This is critical for socket-originated calls where AppDelegate never ran
+    // pushRegistry and its isCallActive flag is still false.
+    if (Platform.isIOS) {
+      try {
+        await const MethodChannel('com.getgabs/calls')
+            .invokeMethod('markCallAccepted');
+        debugPrint('✅ Native notified: markCallAccepted');
+      } catch (e) {
+        debugPrint('⚠️ markCallAccepted channel error: $e');
+      }
+    }
+
     await _createPeerConnection();
 
     localStream = await webrtc.navigator.mediaDevices.getUserMedia({
-      'audio': {'echoCancellation': true, 'noiseSuppression': true, 'autoGainControl': true},
+      'audio': {
+        'echoCancellation': true,
+        'noiseSuppression': true,
+        'autoGainControl': true
+      },
       'video': false,
     }).timeout(const Duration(seconds: 10));
 
@@ -767,28 +1021,51 @@ class WhatsAppCallingService {
       peerConnection!.addTrack(track, localStream!);
     }
 
-    await peerConnection!.setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
+    await peerConnection!
+        .setRemoteDescription(RTCSessionDescription(safeSdp, 'offer'));
+
+    // Drain remote ICE candidates that arrived before _createPeerConnection ran.
+    // These were buffered in the 'ice_candidate' socket handler to avoid the
+    // first-call failure where candidates arrived before peerConnection existed.
+    if (_pendingRemoteCandidates.isNotEmpty) {
+      debugPrint(
+          '🚀 Draining ${_pendingRemoteCandidates.length} buffered remote ICE candidates');
+      for (final c in _pendingRemoteCandidates) {
+        try {
+          await peerConnection!.addCandidate(c);
+        } catch (e) {}
+      }
+      _pendingRemoteCandidates.clear();
+    }
+
     RTCSessionDescription answer = await peerConnection!.createAnswer();
     await peerConnection!.setLocalDescription(answer);
 
-    final response = await http.post(
-      Uri.parse('$socketUrl/accept-whatsapp-call'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'callId': safeCallId,
-        'sdpAnswer': answer.sdp,
-        'api_key': businessApiKey,
-        'acceptedBy': userId,
-      }),
-    ).timeout(const Duration(seconds: 15));
+    final response = await http
+        .post(
+          Uri.parse('$socketUrl/accept-whatsapp-call'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'callId': safeCallId,
+            'sdpAnswer': answer.sdp,
+            'api_key': businessApiKey,
+            'acceptedBy': userId,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
-      throw Exception('Failed to answer: ${response.statusCode}');
+      String message = 'Failed to answer call (${response.statusCode})';
+      try {
+        final errorBody = jsonDecode(response.body) as Map<String, dynamic>;
+        message = (errorBody['error'] ?? errorBody['message'] ?? message).toString();
+      } catch (_) {}
+      throw Exception(message);
     }
 
-    _updateStatus('Connected');
-    callStartTime = DateTime.now();
-    await _logCallStart();
+    // HTTP handshake done — ICE negotiation starts now. Timer and 'Connected'
+    // status fire in onIceConnectionState when ICE actually reaches Connected.
+    _updateStatus('Accepted');
   }
 
   Future<void> makeCall(String phoneNumber) async {
@@ -823,50 +1100,61 @@ class WhatsAppCallingService {
     _updateStatus('Calling...');
     _startCallTimeout();
 
-    localStream = await webrtc.navigator.mediaDevices.getUserMedia({
-      'audio': {'echoCancellation': true, 'noiseSuppression': true, 'autoGainControl': true},
-      'video': false,
-    }).timeout(const Duration(seconds: 10));
+    // Everything past this point can throw (getUserMedia timeout, createOffer,
+    // HTTP). Cancel the ringing timer on any failure so it does not leak — the
+    // caller's cleanupCall() also runs, but this keeps makeCall self-contained.
+    try {
+      localStream = await webrtc.navigator.mediaDevices.getUserMedia({
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true
+        },
+        'video': false,
+      }).timeout(const Duration(seconds: 10));
 
-    for (var track in localStream!.getTracks()) {
-      peerConnection!.addTrack(track, localStream!);
-    }
+      for (var track in localStream!.getTracks()) {
+        peerConnection!.addTrack(track, localStream!);
+      }
 
-    RTCSessionDescription offer = await peerConnection!.createOffer(
-        {'offerToReceiveAudio': true, 'offerToReceiveVideo': false});
-    await peerConnection!.setLocalDescription(offer);
+      RTCSessionDescription offer = await peerConnection!.createOffer(
+          {'offerToReceiveAudio': true, 'offerToReceiveVideo': false});
+      await peerConnection!.setLocalDescription(offer);
 
-    await Future.delayed(const Duration(seconds: 2));
+      RTCSessionDescription? localDesc =
+          await peerConnection!.getLocalDescription();
+      String sdpOffer = localDesc?.sdp ?? offer.sdp ?? '';
 
-    RTCSessionDescription? localDesc = await peerConnection!.getLocalDescription();
-    String sdpOffer = localDesc?.sdp ?? offer.sdp ?? '';
+      if (sdpOffer.isEmpty) {
+        throw Exception('Failed to create SDP offer');
+      }
 
-    if (sdpOffer.isEmpty) {
+      final response = await http
+          .post(
+            Uri.parse('$socketUrl/start-outbound-call'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'to': formattedPhone,
+              'sdpOffer': sdpOffer,
+              'callerId': userId,
+              'adminId': adminId,
+              'api_key': businessApiKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode != 200) {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to start call');
+      }
+
+      final data = jsonDecode(response.body);
+      currentCallId = data['callId'];
+      _updateStatus('Ringing...');
+    } catch (e) {
       _cancelCallTimeout();
-      throw Exception('Failed to create SDP offer');
+      rethrow;
     }
-
-    final response = await http.post(
-      Uri.parse('$socketUrl/start-outbound-call'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'to': formattedPhone,
-        'sdpOffer': sdpOffer,
-        'callerId': userId,
-        'adminId': adminId,
-        'api_key': businessApiKey,
-      }),
-    ).timeout(const Duration(seconds: 20));
-
-    if (response.statusCode != 200) {
-      _cancelCallTimeout();
-      final error = jsonDecode(response.body);
-      throw Exception(error['error'] ?? 'Failed to start call');
-    }
-
-    final data = jsonDecode(response.body);
-    currentCallId = data['callId'];
-    _updateStatus('Ringing...');
   }
 
   Future<void> terminateCall() async {
@@ -878,15 +1166,19 @@ class WhatsAppCallingService {
 
       final prefs = await SharedPreferences.getInstance();
       final backendCallId = currentCallId ?? prefs.getString('pending_call_id');
-      final callkitId = currentCallKitId ?? prefs.getString('pending_callkit_id');
+      final callkitId =
+          currentCallKitId ?? prefs.getString('pending_callkit_id');
 
       if (backendCallId != null && backendCallId.isNotEmpty) {
         try {
-          await http.post(
-            Uri.parse('$socketUrl/terminate-whatsapp-call'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'callId': backendCallId, 'api_key': businessApiKey}),
-          );
+          await http
+              .post(
+                Uri.parse('$socketUrl/terminate-whatsapp-call'),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(
+                    {'callId': backendCallId, 'api_key': businessApiKey}),
+              )
+              .timeout(const Duration(seconds: 8));
         } catch (e) {
           debugPrint('❌ terminate api error: $e');
         }
@@ -898,10 +1190,24 @@ class WhatsAppCallingService {
         } catch (e) {
           debugPrint('❌ endCall error: $e');
         }
+        if (Platform.isIOS) {
+          try {
+            await const MethodChannel('com.getgabs/calls')
+                .invokeMethod('endNativeCall', {'uuid': callkitId});
+            debugPrint('✅ Native CallKit call ended: $callkitId');
+          } catch (e) {
+            debugPrint('⚠️ endNativeCall error: $e');
+          }
+        }
       }
 
       await stopRingtone();
+      // Capture before cleanupCall() nulls all callbacks.
+      // This covers every caller of terminateCall() (CallKit event stream,
+      // ICE failed, HTTP error) — not just the onCallEndedNatively path.
+      final callEndedCb = onCallEnded;
       await cleanupCall();
+      callEndedCb?.call();
     } finally {
       _isCleaningUp = false;
     }
@@ -909,34 +1215,45 @@ class WhatsAppCallingService {
 
   Future<void> _logCallStart() async {
     try {
-      await http.post(
-        Uri.parse('$apiBaseUrl/log-call-start'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'user_id': userId, 'admin_id': adminId,
-          'phone_number': currentPhoneNumber, 'call_id': currentCallId,
-          'call_type': isOutgoingCall ? 'outgoing' : 'incoming',
-          'start_time': DateTime.now().toIso8601String(), 'api_key': businessApiKey,
-        }),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse('$apiBaseUrl/log-call-start'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'user_id': userId,
+              'admin_id': adminId,
+              'phone_number': currentPhoneNumber,
+              'call_id': currentCallId,
+              'call_type': isOutgoingCall ? 'outgoing' : 'incoming',
+              'start_time': DateTime.now().toIso8601String(),
+              'api_key': businessApiKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {}
   }
 
   Future<void> _logCallEnd() async {
     try {
       final duration = callStartTime != null
-          ? DateTime.now().difference(callStartTime!).inSeconds : 0;
-      await http.post(
-        Uri.parse('$apiBaseUrl/log-call-end'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'user_id': userId, 'admin_id': adminId,
-          'phone_number': currentPhoneNumber, 'call_id': currentCallId,
-          'call_type': isOutgoingCall ? 'outgoing' : 'incoming',
-          'end_time': DateTime.now().toIso8601String(),
-          'duration_seconds': duration, 'api_key': businessApiKey,
-        }),
-      ).timeout(const Duration(seconds: 5));
+          ? DateTime.now().difference(callStartTime!).inSeconds
+          : 0;
+      await http
+          .post(
+            Uri.parse('$apiBaseUrl/log-call-end'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'user_id': userId,
+              'admin_id': adminId,
+              'phone_number': currentPhoneNumber,
+              'call_id': currentCallId,
+              'call_type': isOutgoingCall ? 'outgoing' : 'incoming',
+              'end_time': DateTime.now().toIso8601String(),
+              'duration_seconds': duration,
+              'api_key': businessApiKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {}
   }
 
@@ -974,7 +1291,8 @@ class IncomingCallCard extends StatelessWidget {
   });
 
   String _getDisplayName() {
-    if (callerName.isNotEmpty && !RegExp(r'^[\d\s\+\-\(\)]+$').hasMatch(callerName)) {
+    if (callerName.isNotEmpty &&
+        !RegExp(r'^[\d\s\+\-\(\)]+$').hasMatch(callerName)) {
       return callerName;
     }
     return callerNumber;
@@ -983,8 +1301,10 @@ class IncomingCallCard extends StatelessWidget {
   String _getInitials(String name) {
     if (name.isNotEmpty && !RegExp(r'^[\d\s\+\-\(\)]+$').hasMatch(name)) {
       final words = name.trim().split(RegExp(r'\s+'));
-      if (words.length >= 2) return '${words[0][0]}${words[1][0]}'.toUpperCase();
-      if (words.isNotEmpty && words[0].isNotEmpty) return words[0][0].toUpperCase();
+      if (words.length >= 2)
+        return '${words[0][0]}${words[1][0]}'.toUpperCase();
+      if (words.isNotEmpty && words[0].isNotEmpty)
+        return words[0][0].toUpperCase();
     }
     return 'G';
   }
@@ -1005,13 +1325,34 @@ class IncomingCallCard extends StatelessWidget {
     final initials = _getInitials(callerName);
     final formattedNumber = _formatPhoneDisplay(callerNumber);
 
+    // ✅ Per-flavor branding for the incoming-call header — was hardcoded to
+    // GetGabs green/"G"/"GetGabs Audio Calling" for all three apps.
+    final Color brandColor = AppTheme.currentFlavor == 'messagedly'
+        ? const Color(0xff4242D4)
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? const Color(0xff0E7C74)
+            : const Color(0xFF034737);
+    final String brandLetter = AppTheme.currentFlavor == 'messagedly'
+        ? 'M'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'S'
+            : 'G';
+    final String brandLabel = AppTheme.currentFlavor == 'messagedly'
+        ? 'Messagedly Audio Calling'
+        : AppTheme.currentFlavor == 'scalewiz'
+            ? 'Scalewiz Audio Calling'
+            : 'GetGabs Audio Calling';
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 24, offset: const Offset(0, 8)),
+          BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 24,
+              offset: const Offset(0, 8)),
         ],
       ),
       child: Column(
@@ -1020,9 +1361,9 @@ class IncomingCallCard extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-            decoration: const BoxDecoration(
-              color: Color(0xFF034737),
-              borderRadius: BorderRadius.only(
+            decoration: BoxDecoration(
+              color: brandColor,
+              borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(20),
                 topRight: Radius.circular(20),
               ),
@@ -1031,15 +1372,26 @@ class IncomingCallCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  width: 28, height: 28,
-                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6)),
-                  child: const Center(
-                    child: Text('G', style: TextStyle(color: Color(0xFF034737), fontSize: 16, fontWeight: FontWeight.bold)),
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6)),
+                  child: Center(
+                    child: Text(brandLetter,
+                        style: TextStyle(
+                            color: brandColor,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('GetGabs Audio Calling',
-                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600, letterSpacing: 0.3)),
+                Text(brandLabel,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3)),
               ],
             ),
           ),
@@ -1048,10 +1400,16 @@ class IncomingCallCard extends StatelessWidget {
             child: Row(
               children: [
                 Container(
-                  width: 52, height: 52,
-                  decoration: const BoxDecoration(color: Color(0xFF034737), shape: BoxShape.circle),
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                      color: Color(0xFF034737), shape: BoxShape.circle),
                   child: Center(
-                    child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                    child: Text(initials,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1060,35 +1418,50 @@ class IncomingCallCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(displayName,
-                          style: const TextStyle(color: Color(0xFF1A1A1A), fontSize: 16, fontWeight: FontWeight.w700),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                          style: const TextStyle(
+                              color: Color(0xFF1A1A1A),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
-                      Text(formattedNumber, style: const TextStyle(color: Color(0xFF888888), fontSize: 13)),
+                      Text(formattedNumber,
+                          style: const TextStyle(
+                              color: Color(0xFF888888), fontSize: 13)),
                       const SizedBox(height: 2),
                       const Text('Incoming voice call',
-                          style: TextStyle(color: Color(0xFF034737), fontSize: 12, fontWeight: FontWeight.w500)),
+                          style: TextStyle(
+                              color: Color(0xFF034737),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ),
                 GestureDetector(
                   onTap: onDecline,
                   child: Container(
-                    width: 46, height: 46,
+                    width: 46,
+                    height: 46,
                     decoration: BoxDecoration(
                       color: const Color(0xFFFFEEEE),
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFFE53935).withOpacity(0.3)),
+                      border: Border.all(
+                          color: const Color(0xFFE53935).withOpacity(0.3)),
                     ),
-                    child: const Icon(Icons.call_end, color: Color(0xFFE53935), size: 22),
+                    child: const Icon(Icons.call_end,
+                        color: Color(0xFFE53935), size: 22),
                   ),
                 ),
                 const SizedBox(width: 10),
                 GestureDetector(
                   onTap: onAccept,
                   child: Container(
-                    width: 46, height: 46,
-                    decoration: const BoxDecoration(color: Color(0xFF034737), shape: BoxShape.circle),
-                    child: const Icon(Icons.call, color: Colors.white, size: 22),
+                    width: 46,
+                    height: 46,
+                    decoration: const BoxDecoration(
+                        color: Color(0xFF034737), shape: BoxShape.circle),
+                    child:
+                        const Icon(Icons.call, color: Colors.white, size: 22),
                   ),
                 ),
               ],
@@ -1124,7 +1497,7 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   String _status = 'Connecting...';
   Duration _duration = Duration.zero;
   Timer? _timer;
@@ -1137,27 +1510,94 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _waveController =
-        AnimationController(duration: const Duration(seconds: 2), vsync: this)..repeat();
+        AnimationController(duration: const Duration(seconds: 2), vsync: this)
+          ..repeat();
 
-    // ✅ iOS: postFrameCallback use karo + foreground check
-    // ✅ Android: direct answerCall
-    if (Platform.isIOS) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (isAppInForeground && !widget.callingService.callAccepted) {
-          await _answerCall();
-        }
-      });
-    } else {
-      _answerCall();
+    _attachCallCallbacks();
+    _syncServiceState();
+
+    // Answer the incoming call once the UI is ready and the app is
+    // in the foreground on iOS. If the app is still inactive after the first
+    // frame, didChangeAppLifecycleState will retry when resumed.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _tryAnswerIfNeeded();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _tryAnswerIfNeeded();
     }
+  }
+
+  void _attachCallCallbacks() {
+    widget.callingService.onStatusChange = (s) {
+      if (!mounted || _isEnded) return;
+      final statusLower = s.toLowerCase();
+      if (statusLower.contains('connected')) {
+        setState(() {
+          _isConnected = true;
+          _status = 'Connected';
+        });
+        _startTimer();
+      } else if (statusLower.contains('accepted')) {
+        setState(() {});
+      } else if (statusLower.contains('ended') ||
+          statusLower.contains('failed') ||
+          statusLower.contains('terminated') ||
+          statusLower.contains('declined')) {
+        _handleCallEnded(s);
+      } else {
+        setState(() => _status = s);
+      }
+    };
+
+    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
+    widget.callingService.onError = (e) {
+      if (mounted && !_isEnded) _handleCallEnded(e);
+    };
+  }
+
+  void _syncServiceState() {
+    if (!widget.callingService.callAccepted) return;
+
+    final alreadyConnected = widget.callingService.callStartTime != null ||
+        widget.callingService.callStatus.toLowerCase().contains('connected');
+
+    if (alreadyConnected) {
+      setState(() {
+        _isConnected = true;
+        _status = 'Connected';
+      });
+      _startTimer();
+    } else {
+      setState(() {
+        _status = widget.callingService.callStatus.isNotEmpty
+            ? widget.callingService.callStatus
+            : 'Connecting...';
+      });
+    }
+  }
+
+  void _tryAnswerIfNeeded() {
+    if (widget.callingService.callAccepted) return;
+    if (Platform.isIOS &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    _answerCall();
   }
 
   String _getInitials(String name, String number) {
     if (name.isNotEmpty && !RegExp(r'^[\d\s\+\-\(\)]+$').hasMatch(name)) {
       final words = name.trim().split(RegExp(r'\s+'));
-      if (words.length >= 2) return '${words[0][0]}${words[1][0]}'.toUpperCase();
-      if (words.isNotEmpty && words[0].isNotEmpty) return words[0][0].toUpperCase();
+      if (words.length >= 2)
+        return '${words[0][0]}${words[1][0]}'.toUpperCase();
+      if (words.isNotEmpty && words[0].isNotEmpty)
+        return words[0][0].toUpperCase();
     }
     String cleaned = number.replaceAll(RegExp(r'[^\d]'), '');
     if (cleaned.length >= 2) return cleaned.substring(cleaned.length - 2);
@@ -1192,36 +1632,28 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     if (_isEnded) return;
     _timer?.cancel();
     if (mounted) {
-      setState(() { _status = reason; _isEnded = true; _isConnected = false; });
-      Future.delayed(const Duration(milliseconds: 1500), () { if (mounted) Get.back(); });
+      setState(() {
+        _status = reason;
+        _isEnded = true;
+        _isConnected = false;
+      });
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (mounted) Get.back();
+      });
     }
   }
 
   Future<void> _answerCall() async {
-    widget.callingService.onStatusChange = (s) {
-      if (!mounted || _isEnded) return;
-      final statusLower = s.toLowerCase();
-      if (statusLower.contains('connected')) {
-        setState(() { _isConnected = true; _status = 'Connected'; });
-        _startTimer();
-      } else if (statusLower.contains('accepted')) {
-        setState(() {});
-      } else if (statusLower.contains('ended') || statusLower.contains('failed') ||
-          statusLower.contains('terminated') || statusLower.contains('declined')) {
-        _handleCallEnded(s);
-      } else {
-        setState(() => _status = s);
-      }
-    };
-    widget.callingService.onCallEnded = () => _handleCallEnded('Call ended');
-    widget.callingService.onError = (e) { if (mounted && !_isEnded) _handleCallEnded(e); };
-
     try {
       if (widget.pendingSdp == null || widget.pendingCallId == null) {
-        _handleCallEnded('Call expired'); return;
+        _handleCallEnded('Call expired');
+        return;
       }
       await widget.callingService.answerCall();
     } catch (e) {
+      // cleanupCall() resets _callAccepted/_isCallActive so the next
+      // incoming call is not permanently blocked by stale true-flags.
+      await widget.callingService.cleanupCall();
       _handleCallEnded('Failed to connect');
     }
   }
@@ -1229,7 +1661,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && !_isEnded) setState(() => _duration += const Duration(seconds: 1));
+      if (mounted && !_isEnded)
+        setState(() => _duration += const Duration(seconds: 1));
     });
   }
 
@@ -1242,6 +1675,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    WhatsAppCallingConfig.notifyCallScreenClosed();
     _waveController.dispose();
     _timer?.cancel();
     widget.callingService.onStatusChange = null;
@@ -1260,7 +1695,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
             colors: [Color(0xFFF5F5F5), Colors.white, Color(0xFFFAFAFA)],
             stops: [0.0, 0.3, 1.0],
           ),
@@ -1272,22 +1708,34 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                 padding: const EdgeInsets.all(8),
                 child: Row(children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Color(0xFF1F2C34)),
-                    onPressed: () { widget.callingService.terminateCall(); Get.back(); }),
+                      icon: const Icon(Icons.arrow_back,
+                          color: Color(0xFF1F2C34)),
+                      onPressed: () {
+                        widget.callingService.terminateCall();
+                        _handleCallEnded('Call ended');
+                      }),
                   const Spacer(),
                   if (_isConnected && !_isEnded)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
                         color: const Color(0xFF00A884).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Container(width: 6, height: 6,
-                            decoration: const BoxDecoration(color: Color(0xFF00A884), shape: BoxShape.circle)),
+                        Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                                color: Color(0xFF00A884),
+                                shape: BoxShape.circle)),
                         const SizedBox(width: 4),
                         const Text('Encrypted',
-                            style: TextStyle(color: Color(0xFF00A884), fontSize: 11, fontWeight: FontWeight.w500)),
+                            style: TextStyle(
+                                color: Color(0xFF00A884),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500)),
                       ]),
                     ),
                   const Spacer(),
@@ -1302,21 +1750,33 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     builder: (context, child) => CustomPaint(
                       size: const Size(200, 200),
                       painter: _WavePainter(
-                          animationValue: _waveController.value, color: const Color(0xFF00A884)),
+                          animationValue: _waveController.value,
+                          color: const Color(0xFF00A884)),
                     ),
                   ),
                 Container(
-                  width: 110, height: 110,
+                  width: 110,
+                  height: 110,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _isEnded ? Colors.grey[400] : const Color(0xFF00A884),
+                    color:
+                        _isEnded ? Colors.grey[400] : const Color(0xFF00A884),
                     boxShadow: _isEnded
                         ? null
-                        : [BoxShadow(color: const Color(0xFF00A884).withOpacity(0.25), blurRadius: 25, spreadRadius: 3)],
+                        : [
+                            BoxShadow(
+                                color:
+                                    const Color(0xFF00A884).withOpacity(0.25),
+                                blurRadius: 25,
+                                spreadRadius: 3)
+                          ],
                   ),
                   child: Center(
                     child: Text(initials,
-                        style: const TextStyle(color: Colors.white, fontSize: 38, fontWeight: FontWeight.bold)),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 38,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
               ]),
@@ -1324,8 +1784,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Text(displayName,
-                    style: const TextStyle(color: Color(0xFF1F2C34), fontSize: 26, fontWeight: FontWeight.w600),
-                    textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    style: const TextStyle(
+                        color: Color(0xFF1F2C34),
+                        fontSize: 26,
+                        fontWeight: FontWeight.w600),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 8),
               if (_shouldShowPhoneNumber())
@@ -1334,14 +1799,25 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
               const SizedBox(height: 16),
               Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 if (!_isConnected && !_isEnded)
-                  Container(width: 12, height: 12, margin: const EdgeInsets.only(right: 8),
-                      child: const CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00A884))),
+                  Container(
+                      width: 12,
+                      height: 12,
+                      margin: const EdgeInsets.only(right: 8),
+                      child: const CircularProgressIndicator(
+                          strokeWidth: 2, color: Color(0xFF00A884))),
                 Text(
-                  _isConnected && !_isEnded ? _formatDuration(_duration) : _status,
+                  _isConnected && !_isEnded
+                      ? _formatDuration(_duration)
+                      : _status,
                   style: TextStyle(
-                    color: _isEnded ? Colors.redAccent : _isConnected ? const Color(0xFF00A884) : Colors.grey[600],
+                    color: _isEnded
+                        ? Colors.redAccent
+                        : _isConnected
+                            ? const Color(0xFF00A884)
+                            : Colors.grey[600],
                     fontSize: _isConnected ? 20 : 15,
-                    fontWeight: _isConnected ? FontWeight.w600 : FontWeight.normal,
+                    fontWeight:
+                        _isConnected ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
               ]),
@@ -1349,33 +1825,63 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
               if (!_isEnded)
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-                    _buildControlButton(_isSpeaker ? Icons.volume_up : Icons.volume_up_outlined,
-                        'Speaker', _isSpeaker, () => setState(() => _isSpeaker = !_isSpeaker)),
-                    _buildControlButton(Icons.videocam_off_outlined, 'Video', false, () {}, isDisabled: true),
-                    _buildControlButton(_isMuted ? Icons.mic_off : Icons.mic_none, 'Mute', _isMuted, () {
-                      setState(() => _isMuted = !_isMuted);
-                      widget.callingService.localStream?.getAudioTracks().forEach((t) => t.enabled = !_isMuted);
-                    }),
-                  ]),
+                  child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _buildControlButton(
+                            _isSpeaker
+                                ? Icons.volume_up
+                                : Icons.volume_up_outlined,
+                            'Speaker',
+                            _isSpeaker,
+                            () => setState(() => _isSpeaker = !_isSpeaker)),
+                        _buildControlButton(
+                            Icons.videocam_off_outlined, 'Video', false, () {},
+                            isDisabled: true),
+                        _buildControlButton(
+                            _isMuted ? Icons.mic_off : Icons.mic_none,
+                            'Mute',
+                            _isMuted, () {
+                          setState(() => _isMuted = !_isMuted);
+                          widget.callingService.localStream
+                              ?.getAudioTracks()
+                              .forEach((t) => t.enabled = !_isMuted);
+                        }),
+                      ]),
                 ),
               SizedBox(height: _isEnded ? 20 : 30),
               GestureDetector(
-                onTap: _isEnded ? () => Get.back() : () => widget.callingService.terminateCall(),
+                onTap: _isEnded
+                    ? () => Get.back()
+                    : () {
+                        widget.callingService.terminateCall();
+                        _handleCallEnded('Call ended');
+                      },
                 child: Container(
-                  width: 65, height: 65,
+                  width: 65,
+                  height: 65,
                   decoration: BoxDecoration(
-                    color: _isEnded ? Colors.grey[400] : const Color(0xFFEA4335),
+                    color:
+                        _isEnded ? Colors.grey[400] : const Color(0xFFEA4335),
                     shape: BoxShape.circle,
                     boxShadow: _isEnded
                         ? null
-                        : [BoxShadow(color: const Color(0xFFEA4335).withOpacity(0.35), blurRadius: 12, offset: const Offset(0, 4))],
+                        : [
+                            BoxShadow(
+                                color:
+                                    const Color(0xFFEA4335).withOpacity(0.35),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4))
+                          ],
                   ),
-                  child: Icon(_isEnded ? Icons.close : Icons.call_end, color: Colors.white, size: 28),
+                  child: Icon(_isEnded ? Icons.close : Icons.call_end,
+                      color: Colors.white, size: 28),
                 ),
               ),
               const SizedBox(height: 8),
-              if (_isEnded) Text('Close', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              if (_isEnded)
+                Text('Close',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12)),
               const SizedBox(height: 40),
             ],
           ),
@@ -1384,23 +1890,32 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     );
   }
 
-  Widget _buildControlButton(IconData icon, String label, bool isActive, VoidCallback onTap,
+  Widget _buildControlButton(
+      IconData icon, String label, bool isActive, VoidCallback onTap,
       {bool isDisabled = false}) {
     return GestureDetector(
       onTap: isDisabled ? null : onTap,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: 50, height: 50,
+          width: 50,
+          height: 50,
           decoration: BoxDecoration(
             color: isActive
                 ? const Color(0xFF00A884)
-                : isDisabled ? Colors.grey[200] : Colors.grey[100],
+                : isDisabled
+                    ? Colors.grey[200]
+                    : Colors.grey[100],
             shape: BoxShape.circle,
             border: Border.all(
-                color: isActive ? const Color(0xFF00A884) : Colors.grey[300]!, width: 1),
+                color: isActive ? const Color(0xFF00A884) : Colors.grey[300]!,
+                width: 1),
           ),
           child: Icon(icon,
-              color: isActive ? Colors.white : isDisabled ? Colors.grey[400] : const Color(0xFF1F2C34),
+              color: isActive
+                  ? Colors.white
+                  : isDisabled
+                      ? Colors.grey[400]
+                      : const Color(0xFF1F2C34),
               size: 22),
         ),
         const SizedBox(height: 6),
@@ -1438,7 +1953,8 @@ class _WavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WavePainter oldDelegate) => oldDelegate.animationValue != animationValue;
+  bool shouldRepaint(_WavePainter oldDelegate) =>
+      oldDelegate.animationValue != animationValue;
 }
 
 // ============================================
@@ -1455,8 +1971,8 @@ class GlobalCallListenerService {
   GlobalCallListenerService._();
 
   WhatsAppCallingService? _service;
-  bool _callScreenOpen = false;
   bool _isInitialized = false;
+  bool _isInitializing = false;
   Map<String, dynamic>? pendingCall;
   StreamSubscription? _callkitSubscription;
 
@@ -1469,11 +1985,11 @@ class GlobalCallListenerService {
     required String sdp,
     required String callId,
   }) {
-    if (_callScreenOpen) {
+    if (WhatsAppCallingConfig.isCallScreenOpen) {
       debugPrint('⚠️ Call screen already opened');
       return;
     }
-    _callScreenOpen = true;
+    WhatsAppCallingConfig.notifyCallScreenOpened();
     Get.to(
       () => IncomingCallScreen(
         callingService: service,
@@ -1483,141 +1999,179 @@ class GlobalCallListenerService {
         pendingCallId: callId,
       ),
       transition: Transition.fadeIn,
-    )?.then((_) => _callScreenOpen = false);
+    )?.then((_) => WhatsAppCallingConfig.notifyCallScreenClosed());
   }
 
+  // #changedWithJClaude — Bug 5: guard against service teardown while a call is pending/active.
+  // Previously any call to initialize() with a disconnected socket would dispose the service
+  // and lose the SDP that was already set via setPendingCall(). Now we reconnect instead.
   Future<void> initialize({
     required int userId,
     required int adminId,
     required String businessApiKey,
   }) async {
-    if (_isInitialized && (_service?.socket?.connected == true)) {
-      debugPrint('✅ GlobalListener already active');
+    // Guard against concurrent calls (e.g. onReady + onIncomingVoipCall racing).
+    if (_isInitializing) {
+      debugPrint('⏭️ GlobalListener already initializing — skipping duplicate call');
       return;
     }
 
-    debugPrint('🌐 GlobalListener initializing...');
-
-    if (_service != null) {
-      _service!.onStatusChange = null;
-      _service!.onCallEnded = null;
-      _service!.onError = null;
-      _service!.onIncomingCall = null;
-      await _service!.cleanupCall();
-      _service!.socket?.disconnect();
-      _service!.socket?.dispose();
-      _service = null;
+    // If already set up and a pending/active call is in progress, never tear
+    // down — just reconnect the socket if it dropped. Tearing down here would
+    // destroy the pending SDP that was stored before the user answered.
+    if (_isInitialized && _service != null) {
+      if (_service!.hasActivePendingCall || _service!.isCallActive) {
+        if (_service!.socket?.connected != true) {
+          _service!.socket?.connect();
+          debugPrint('🔄 GlobalListener: socket reconnected for active call');
+        } else {
+          debugPrint(
+              '✅ GlobalListener already active with pending call — skipping reinit');
+        }
+        return;
+      }
+      if (_service!.socket?.connected == true) {
+        debugPrint('✅ GlobalListener already active');
+        return;
+      }
     }
 
-    await _callkitSubscription?.cancel();
-    _isInitialized = false;
+    _isInitializing = true;
+    debugPrint('🌐 GlobalListener initializing...');
 
-    _service = WhatsAppCallingService(
-      userId: userId,
-      adminId: adminId,
-      userRole: 'agent',
-      businessApiKey: businessApiKey,
-    );
-    _service!.isGlobalListener = true;
-    await _service!.initialize();
+    try {
+      if (_service != null) {
+        _service!.onStatusChange = null;
+        _service!.onCallEnded = null;
+        _service!.onError = null;
+        _service!.onIncomingCall = null;
+        await _service!.cleanupCall();
+        _service!.socket?.disconnect();
+        _service!.socket?.dispose();
+        _service = null;
+      }
 
-    // ============================================
-    // CALLKIT EVENT LISTENER
-    // ============================================
-    _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
-      debugPrint('📞 CallKit EVENT: $event');
+      await _callkitSubscription?.cancel();
+      _isInitialized = false;
 
-      // ✅ v3.0.0 — sealed class pattern (Event enum removed)
-      if (event is CallEventActionCallAccept) {
-        debugPrint('📞 ACCEPT CLICKED');
+      _service = WhatsAppCallingService(
+        userId: userId,
+        adminId: adminId,
+        userRole: 'agent',
+        businessApiKey: businessApiKey,
+      );
+      _service!.isGlobalListener = true;
+      await _service!.initialize();
 
-        final prefs = await SharedPreferences.getInstance();
-        final callId = prefs.getString('pending_call_id');
-        final sessionString = prefs.getString('pending_call_session');
-        final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
-        final callerNumber = prefs.getString('pending_caller_number') ?? '';
+      // Mark initialized BEFORE the iOS-only early return so Android callers
+      // see isInitialized=true and the guard at line 1927 prevents unnecessary
+      // service teardowns on subsequent initialize() calls.
+      _isInitialized = true;
 
-        if (callId == null || sessionString == null) return;
+      // ============================================
+      // CALLKIT EVENT LISTENER
+      // ============================================
+      // On Android, setupCallKitEvents() in api_end_points.dart already handles
+      // all FlutterCallkitIncoming events. Registering a second listener here
+      // would cause CallEventActionCallAccept to be processed twice concurrently,
+      // creating a race where the first handler may clear SharedPreferences before
+      // the second reads them, resulting in empty callId/sdp for setPendingCall().
+      if (!Platform.isIOS) return;
 
-        final session = jsonDecode(sessionString);
+      _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((event) async {
+        debugPrint('📞 CallKit EVENT: $event');
 
-        _service?.setPendingCall(callId: callId, sdp: session['sdp']);
+        // ✅ v3.0.0 — sealed class pattern (Event enum removed)
+        if (event is CallEventActionCallAccept) {
+          debugPrint('📞 ACCEPT CLICKED');
 
-        if (_service?.socket?.connected != true) {
-          _service?.socket?.connect();
-          await Future.delayed(const Duration(seconds: 2));
-        }
+          final prefs = await SharedPreferences.getInstance();
+          final callId = prefs.getString('pending_call_id');
+          final sessionString = prefs.getString('pending_call_session');
+          final callerName = prefs.getString('pending_caller_name') ?? 'Unknown';
+          final callerNumber = prefs.getString('pending_caller_number') ?? '';
 
-        // ✅ FOREGROUND
-        if (isAppInForeground) {
-          debugPrint('🟢 FOREGROUND FLOW');
-          if (_callScreenOpen) {
-            debugPrint('⚠️ Screen already open');
-            return;
-          }
-          openCallScreen(
-            service: _service!,
-            callerName: callerName,
-            callerNumber: callerNumber,
-            sdp: session['sdp'],
-            callId: callId,
-          );
-        }
+          if (callId == null || sessionString == null) return;
 
-        // ✅ BACKGROUND / KILLED
-        else {
-          debugPrint('🔴 BACKGROUND FLOW');
+          final session = jsonDecode(sessionString);
 
-          final bgUserId = await WhatsAppCallingConfig.getUserId();
-          final bgAdminId = await WhatsAppCallingConfig.getAdminId();
-          final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
-          final avatar =
-              'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+          _service?.setPendingCall(callId: callId, sdp: session['sdp']);
 
-          WhatsAppCallingConfig.storePendingNavigation({
-            'userId': bgUserId,
-            'adminId': bgAdminId,
-            'apiKey': bgApiKey,
-            'callerNumber': callerNumber,
-            'callerName': callerName,
-            'avatar': avatar,
-          });
           if (_service?.socket?.connected != true) {
             _service?.socket?.connect();
             await Future.delayed(const Duration(seconds: 2));
           }
-          if (!(_service?.callAccepted ?? false)) {
-            try {
-              await _service?.answerCall();
-              debugPrint('✅ Call answered in background');
-            } catch (e) {
-              debugPrint('❌ Background answerCall error: $e');
+
+          // ✅ FOREGROUND
+          if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+            debugPrint('🟢 FOREGROUND FLOW');
+            if (WhatsAppCallingConfig.isCallScreenOpen) {
+              debugPrint('⚠️ Screen already open');
+              return;
             }
+            openCallScreen(
+              service: _service!,
+              callerName: callerName,
+              callerNumber: callerNumber,
+              sdp: session['sdp'],
+              callId: callId,
+            );
           }
+
+          // #changedWithJClaude — Bug 4: removed answerCall() + _waitForSocketConnected +
+          // _quickAcceptToServer from the background path. getUserMedia() fails silently in
+          // iOS background (no active audio session), and the socket wait (up to 12 s) races
+          // the server timeout. Now we only store pending nav; the full WebRTC handshake runs
+          // in IncomingCallScreen.initState() once CallKit has activated the audio session.
+          // Also deleted the now-unused _waitForSocketConnected and _quickAcceptToServer helpers.
+          // BACKGROUND / KILLED
+          else {
+            debugPrint('🔴 BACKGROUND FLOW — deferring WebRTC to foreground');
+
+            final bgUserId = await WhatsAppCallingConfig.getUserId();
+            final bgAdminId = await WhatsAppCallingConfig.getAdminId();
+            final bgApiKey = await WhatsAppCallingConfig.getBusinessApiKey();
+            final avatar =
+                'https://ui-avatars.com/api/?name=${Uri.encodeComponent(callerName)}&background=075E54&color=fff&size=200&rounded=true';
+
+            // Store nav so AppLifecycleObserver.resumed opens the call screen.
+            // Do NOT call answerCall() here — iOS audio session is not active in
+            // background, getUserMedia() fails silently, and the SDP exchange
+            // would race against the server timeout before the UI even opens.
+            // The full WebRTC handshake runs in IncomingCallScreen.initState()
+            // once the app foregrounds and the audio session is activated by CallKit.
+            WhatsAppCallingConfig.storePendingNavigation({
+              'userId': bgUserId,
+              'adminId': bgAdminId,
+              'apiKey': bgApiKey,
+              'callerNumber': callerNumber,
+              'callerName': callerName,
+              'avatar': avatar,
+            });
+            debugPrint('✅ Pending navigation stored — will open on foreground');
+          }
+        } else if (event is CallEventActionCallTimeout) {
+          debugPrint('📞 Call Timeout');
+          await _service?.terminateCall();
+        } else if (event is CallEventActionCallEnded) {
+          debugPrint('📞 Call Ended');
+          await _service?.terminateCall();
+        } else if (event is CallEventActionCallToggleAudioSession) {
+          debugPrint('📞 Audio session toggled');
+        } else {
+          debugPrint('📞 Unhandled CallKit event: $event');
         }
+      }, onError: (e, stack) {
+        // flutter_callkit_incoming throws FormatException for ACTION_CALL_TOGGLE_AUDIO_SESSION
+        // when iOS fires it without an id — swallow the error so the subscription stays alive.
+        debugPrint('⚠️ CallKit stream error (ignored): $e');
+      }, cancelOnError: false);
 
-      } else if (event is CallEventActionCallDecline) {
-        debugPrint('📞 Call Declined');
-        await _service?.terminateCall();
-
-      } else if (event is CallEventActionCallTimeout) {
-        debugPrint('📞 Call Timeout');
-        await _service?.terminateCall();
-
-      } else if (event is CallEventActionCallEnded) {
-        debugPrint('📞 Call Ended');
-        await _service?.cleanupCall();
-
-      } else if (event is CallEventActionCallToggleAudioSession) {
-        debugPrint('📞 Audio session toggled');
-
-      } else {
-        debugPrint('📞 Unhandled CallKit event: $event');
-      }
-    });
-
-    _isInitialized = true;
-    debugPrint('✅ GlobalCallListenerService initialized');
+      _isInitialized = true;
+      debugPrint('✅ GlobalCallListenerService initialized');
+    } finally {
+      _isInitializing = false;
+    }
   }
 
   void dispose() {

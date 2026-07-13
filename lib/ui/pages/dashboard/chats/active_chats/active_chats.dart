@@ -11,6 +11,7 @@ class ActiveChats extends StatelessWidget {
   final DashboardController dashboardController =
       Get.find<DashboardController>();
 bool get _isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
+bool get _isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
   @override
   Widget build(BuildContext context) {
     return Obx(() {
@@ -132,9 +133,11 @@ bool get _isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly'
           Material(
             borderRadius: BorderRadius.circular(5),
             elevation: 0,
-            color: _isMessagedly 
+            color: _isMessagedly
                 ? const Color(0xff4242D4)
-                : Colors.green,
+                : _isScalewiz
+                    ? const Color(0xff17A398)
+                    : Colors.green,
             child: InkWell(
               onTap: () {
              dashboardController.refreshActiveChatList(increment: 'replace');

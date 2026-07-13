@@ -32,33 +32,33 @@ class AppTheme {
   // ============== 🎨 DYNAMIC COLORS (Jo flavor ke hisab se badlenge) ==============
 
   static Color get appThemeColor {
-    return currentFlavor == 'messagedly' 
-        ? const Color(0xff4242D4) // Messagedly Blue
-        : const Color(0xff034737); // GetGabs Green
+    if (currentFlavor == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue
+    if (currentFlavor == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
+    return const Color(0xff034737); // GetGabs Green
   }
 
   static Color get authButtonColor {
-    return currentFlavor == 'messagedly' 
-        ? const Color(0xff4242D4) // Messagedly Blue (Aapke code mein typo tha 0xff04242D4, use fix kiya hai)
-        : const Color(0xff034737); // GetGabs Green
+    if (currentFlavor == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue (Aapke code mein typo tha 0xff04242D4, use fix kiya hai)
+    if (currentFlavor == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
+    return const Color(0xff034737); // GetGabs Green
   }
 
   static Color get boarderColor {
-    return currentFlavor == 'messagedly' 
-        ? const Color.fromARGB(255, 156, 178, 250) 
-        : const Color(0xff77FFAA);
+    if (currentFlavor == 'messagedly') return const Color.fromARGB(255, 156, 178, 250);
+    if (currentFlavor == 'scalewiz') return const Color(0xff7FE0D4);
+    return const Color(0xff77FFAA);
   }
 
   static Color get unreadMessagesColor {
-    return currentFlavor == 'messagedly' 
-        ? const Color(0xff4242D4)
-        : const Color(0xff5ED88C);
+    if (currentFlavor == 'messagedly') return const Color(0xff4242D4);
+    if (currentFlavor == 'scalewiz') return const Color(0xff17A398);
+    return const Color(0xff5ED88C);
   }
 
   static Color get messagesColor {
-    return currentFlavor == 'messagedly' 
-        ? const Color.fromARGB(255, 230, 237, 255) 
-        : const Color(0xffDCFCD7);
+    if (currentFlavor == 'messagedly') return const Color.fromARGB(255, 230, 237, 255);
+    if (currentFlavor == 'scalewiz') return const Color(0xffD9F5F1);
+    return const Color(0xffDCFCD7);
   }
 
   // ============== 📝 STYLES ==============

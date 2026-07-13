@@ -119,7 +119,7 @@ final String? direction;
     return Message(
       id: json['id'] ?? 0,
       messageText: json['message_text'] ?? '',
-      messageId: json['message_id'] ?? '',
+      messageId: json['message_id']?.toString() ?? '',
       messageType: json['message_type'] ?? '',
       isAutoreply: (json['is_autoreply'] ?? "no") == "yes",
       captionText: json['caption_text'] ?? '',

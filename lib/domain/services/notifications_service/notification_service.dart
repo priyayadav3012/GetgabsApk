@@ -1,6 +1,7 @@
 // File: lib/domain/services/notifications_service/notification_service.dart
 // ✅ UNIFIED FILE — Works for both Android & iOS
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:app_settings/app_settings.dart';
 import 'package:dio/dio.dart';
@@ -10,11 +11,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/active_chat_model.dart';
-import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
+import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
-import 'package:getgabs/ui/pages/dashboard/dashboard.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../routes/app_route.dart';
@@ -24,6 +24,7 @@ class NotificationService {
   FirebaseMessaging firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
+  bool _localNotificationsInitialized = false;
   var role = ' '.obs;
   var id = ' '.obs;
   var user_privilage = ' '.obs;
@@ -43,7 +44,8 @@ class NotificationService {
 
     if (settings.authorizationStatus == AuthorizationStatus.authorized) {
       print("User granted permission");
-    } else if (settings.authorizationStatus == AuthorizationStatus.provisional) {
+    } else if (settings.authorizationStatus ==
+        AuthorizationStatus.provisional) {
       print("User granted provisional permission");
     } else {
       AppSettings.openAppSettings();
@@ -56,15 +58,19 @@ class NotificationService {
   // ✅ Android: flavor-aware notification icon
   // ✅ iOS: DarwinInitializationSettings
   // ============================================
-  void initLocalNotifications(RemoteMessage message) async {
-    // ✅ Android: Messagedly flavor ke liye alag icon
-    // ✅ iOS: Android icon relevant nahi — default use hoga
-    final String notificationIcon =
-        LoginWithEmailController.currentFlavor == 'messagedly'
-            ? '@mipmap/ic_notification_messagedly'
-            : '@mipmap/ic_launcher';
+  Future<void> initLocalNotifications() async {
+    if (_localNotificationsInitialized) {
+      return;
+    }
 
-    var androidInitializationsSettings =
+    // ✅ Android: default launcher icon — ic_notification_messagedly was
+    // referenced for the messagedly flavor but that mipmap resource was
+    // never added, which made initialize() throw and silently blocked
+    // chat list loading for that flavor only.
+    // ✅ iOS: Android icon relevant nahi — default use hoga
+    const String notificationIcon = '@mipmap/ic_launcher';
+
+    const androidInitializationsSettings =
         AndroidInitializationSettings(notificationIcon);
     var iOSInitializationsSettings = const DarwinInitializationSettings();
     var initializationSettings = InitializationSettings(
@@ -72,17 +78,31 @@ class NotificationService {
         iOS: iOSInitializationsSettings);
 
     await _flutterLocalNotificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: (payload) {
-        print('hi this is it');
-        if (message.data.containsKey('profile_wa_key')) {
-          var profile = createProfileFromMessage(message);
-          handleMessage(message, profile: profile);
-        } else {
-          print("No profile data in notification");
+      settings: initializationSettings,
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload == null || payload.isEmpty) {
+          print("No notification payload received.");
+          return;
+        }
+
+        try {
+          final decodedPayload = jsonDecode(payload);
+          final profileData = _extractProfileData(decodedPayload);
+
+          if (profileData != null) {
+            final profile = createProfileFromData(profileData);
+            handleProfileNavigation(profile);
+          } else {
+            print("No profile data in notification");
+          }
+        } catch (e) {
+          print("Failed to decode notification payload: $e");
         }
       },
     );
+
+    _localNotificationsInitialized = true;
   }
 
   // ============================================
@@ -103,7 +123,7 @@ class NotificationService {
 
       print(value);
       String baseTopicSuffix;
-     switch (role) {
+      switch (role) {
         case 'user':
           baseTopicSuffix = "user$id";
           break;
@@ -139,8 +159,8 @@ class NotificationService {
       final privilege = value['user_privilage'];
 
       // ✅ Flavor prefix — dono apps ke topics alag
-          String baseTopicSuffix;
-     switch (role) {
+      String baseTopicSuffix;
+      switch (role) {
         case 'user':
           baseTopicSuffix = "user$id";
           break;
@@ -160,6 +180,23 @@ class NotificationService {
     }
   }
 
+  Future<bool> _isApnsTokenAvailable() async {
+    if (!Platform.isIOS) return true;
+
+    try {
+      final apnsToken = await firebaseMessaging.getAPNSToken();
+      if (apnsToken == null || apnsToken.isEmpty) {
+        print("⚠️ APNS token not set yet before unsubscribe.");
+        return false;
+      }
+      print("✅ APNS token available before unsubscribe: $apnsToken");
+      return true;
+    } catch (e) {
+      print("⚠️ APNS token check failed before unsubscribe: $e");
+      return false;
+    }
+  }
+
   // ============================================
   // UNSUBSCRIBE FROM TOPIC
   // ============================================
@@ -173,6 +210,17 @@ class NotificationService {
         return;
       }
 
+      if (Platform.isIOS) {
+        final apnsReady = await _isApnsTokenAvailable();
+        if (!apnsReady) {
+          print(
+              "⚠️ Skipping unsubscribeFromTopic on iOS because APNS token is not ready.");
+          userData.clearAllData();
+          Get.offAllNamed(AppRoute.loginWithEmail);
+          return;
+        }
+      }
+
       print("📡 Unsubscribing from: $topic");
       await firebaseMessaging.unsubscribeFromTopic(topic);
       print("✅ UNSUBSCRIBED FROM TOPIC: $topic");
@@ -181,15 +229,15 @@ class NotificationService {
       Get.offAllNamed(AppRoute.loginWithEmail);
     } catch (e) {
       print("❌ [onUnsubscribeTopic] Error: $e");
+      userData.clearAllData();
+      Get.offAllNamed(AppRoute.loginWithEmail);
     }
   }
 
   // ============================================
   // CREATE PROFILE FROM MESSAGE
   // ============================================
-  Profile createProfileFromMessage(RemoteMessage message) {
-    Map<String, dynamic> data = message.data;
-
+  Profile createProfileFromData(Map<String, dynamic> data) {
     String? profileWaKey = data['profile_wa_key'];
     String? profileWaId = data["profile_wa_id"];
     String? getPendingMsgCount = data["getpandingmsg_count"];
@@ -219,49 +267,128 @@ class NotificationService {
     );
   }
 
+  Profile createProfileFromMessage(RemoteMessage message) {
+    return createProfileFromData(message.data);
+  }
+
+  Map<String, dynamic>? _extractProfileData(dynamic payload) {
+    if (payload is! Map) {
+      return null;
+    }
+
+    final payloadMap = Map<String, dynamic>.from(payload);
+
+    if (payloadMap.containsKey('profile_wa_key')) {
+      return payloadMap;
+    }
+
+    final nestedData = payloadMap['data'];
+    if (nestedData is Map<String, dynamic> &&
+        nestedData.containsKey('profile_wa_key')) {
+      final extracted = Map<String, dynamic>.from(nestedData);
+
+      if (payloadMap['customerprofile_wa_id'] != null &&
+          extracted['profile_wa_id'] == null) {
+        extracted['profile_wa_id'] =
+            payloadMap['customerprofile_wa_id'].toString();
+      }
+
+      if (payloadMap['customerprofilename'] != null &&
+          extracted['profile_name'] == null) {
+        extracted['profile_name'] =
+            payloadMap['customerprofilename'].toString();
+      }
+
+      return extracted;
+    }
+
+    return null;
+  }
+
+  void handleProfileNavigation(Profile profile) {
+    if (Get.currentRoute.contains('/MessagesPage')) {
+      final MessagesPageController? messagesPageController =
+          Get.isRegistered<MessagesPageController>()
+              ? Get.find<MessagesPageController>()
+              : null;
+
+      if (messagesPageController != null) {
+        if (messagesPageController.profileWaKey != profile.profileWaKey) {
+          messagesPageController.profileWaId = profile.profileWaId;
+          messagesPageController.profileWaKey = profile.profileWaKey;
+          messagesPageController.messageChatList.clear();
+          messagesPageController.userProfile.value = profile;
+          messagesPageController.currentPage.value = 1;
+          messagesPageController.loadChatsApi(
+              userKey: profile.profileWaKey, from: 'outside');
+        }
+      } else {
+        print(
+            "MessagesPageController not found, navigating to new MessagesPage.");
+      }
+    } else {
+      print(
+          "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
+      Get.to(() =>
+          MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
+    }
+  }
+
   // ============================================
   // FIREBASE INIT — FOREGROUND MESSAGES
   // ============================================
- void firebaseInit() {
-  FirebaseMessaging.onMessage.listen((message) async {
-
-    final msgType = message.data['type'] ?? '';
-    if (msgType == 'incoming_call' || msgType == 'call_terminated') {
-      debugPrint('📞 Call notification — skipping');
-      return;
-    }
-
-    if (Platform.isIOS) {
-      iosForegroundMessage();
-      return;
-    }
-
-    if (Platform.isAndroid) {
-      
-      // ✅ KEY FIX — notification block present hai
-      // toh Android OS already show kar dega
-      // hum dobara show nahi karenge = double band
-      if (message.notification != null) {
-        debugPrint('⏭️ Skipping — Android OS will show automatically');
+  void firebaseInit() {
+    FirebaseMessaging.onMessage.listen((message) async {
+      final msgType = message.data['type'] ?? '';
+      if (msgType == 'incoming_call' || msgType == 'call_terminated') {
+        debugPrint('📞 Call notification — skipping');
         return;
       }
 
-      // Sirf data-only messages pe manually show karo
-      if (message.data.isNotEmpty) {
-        showNotification(message);
+      // Refresh the in-app chat lists so the customer moves to the top /
+      // shows as unread. This must happen regardless of whether Android
+      // also auto-displays a system notification below — that only covers
+      // the tray, not the in-app list, and the Socket.IO 'chatdata' event
+      // this used to rely on doesn't reliably fire for every message.
+      if (msgType == 'new_message' && Get.isRegistered<DashboardController>()) {
+        final dc = Get.find<DashboardController>();
+        dc.refreshActiveChatList(increment: 'replace');
+        dc.refreshRollingOverChatList(increment: 'replace');
       }
-    }
-  });
-} // ============================================
+
+      if (Platform.isIOS) {
+        iosForegroundMessage();
+        return;
+      }
+
+      if (Platform.isAndroid) {
+        // ✅ KEY FIX — notification block present hai
+        // toh Android OS already show kar dega
+        // hum dobara show nahi karenge = double band
+        if (message.notification != null) {
+          debugPrint('⏭️ Skipping — Android OS will show automatically');
+          return;
+        }
+
+        // Sirf data-only messages pe manually show karo
+        if (message.data.isNotEmpty) {
+          showNotification(message);
+        }
+      }
+    });
+  } // ============================================
+
   // BACKGROUND / TERMINATED MESSAGE HANDLER
   // ============================================
   Future<void> setupInteractMessage() async {
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
       print('background=============++++++++++++++');
-      if (message.data.containsKey('profile_wa_key')) {
+      final profileData = _extractProfileData(message.data);
+
+      if (profileData != null) {
         print('fire notifcationssssssssssss');
-        var profile = createProfileFromMessage(message);
-        handleMessage(message, profile: profile);
+        var profile = createProfileFromData(profileData);
+        handleProfileNavigation(profile);
       } else {
         print("Topic Notification received without profile data");
       }
@@ -278,10 +405,11 @@ class NotificationService {
           debugPrint('📞 Call notification in getInitialMessage — skipping');
           return;
         }
-        if (message.data.containsKey('profile_wa_key')) {
-          var profile = createProfileFromMessage(message);
-          Get.to(() => MessagesPage(
-              profile: profile, profileWaKey: profile.profileWaKey));
+        final profileData = _extractProfileData(message.data);
+
+        if (profileData != null) {
+          var profile = createProfileFromData(profileData);
+          handleProfileNavigation(profile);
         } else {
           print("Topic Notification received without profile data");
         }
@@ -297,6 +425,41 @@ class NotificationService {
           'profileId': profile.profileWaId,
           'profileName': profile.profileName,
         });
+  }
+
+  Future<void> showChatNotification({
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'message', 'text',
+        importance: Importance.max,
+        playSound: true,
+        showBadge: true,
+        enableVibration: true);
+
+    AndroidNotificationDetails androidNotificationDetails =
+        AndroidNotificationDetails(channel.id, channel.name,
+            channelDescription: 'used for showing chat messages.',
+            importance: Importance.max,
+            priority: Priority.high,
+            playSound: true,
+            ticker: 'ticker',
+            enableVibration: true);
+    DarwinNotificationDetails darwinNotificationDetails =
+        const DarwinNotificationDetails(
+            presentAlert: true, presentBadge: true, presentSound: true);
+    NotificationDetails notificationDetails = NotificationDetails(
+        android: androidNotificationDetails, iOS: darwinNotificationDetails);
+
+    await _flutterLocalNotificationsPlugin.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      notificationDetails: notificationDetails,
+      payload: payload,
+    );
   }
 
   // ============================================
@@ -324,10 +487,12 @@ class NotificationService {
     NotificationDetails notificationDetails = NotificationDetails(
         android: androidNotificationDetails, iOS: darwinNotificationDetails);
     _flutterLocalNotificationsPlugin.show(
-        DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        message.notification!.title,
-        message.notification!.body,
-        notificationDetails);
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: message.notification!.title,
+      body: message.notification!.body,
+      notificationDetails: notificationDetails,
+      payload: jsonEncode(message.data),
+    );
   }
 
   // ============================================
@@ -392,10 +557,10 @@ class NotificationService {
     );
 
     _flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      message.notification?.title ?? 'No Title',
-      message.notification?.body ?? 'No Body',
-      notificationDetails,
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: message.notification!.title,
+      body: message.notification!.body,
+      notificationDetails: notificationDetails,
       payload: "data",
     );
   }
@@ -413,40 +578,11 @@ class NotificationService {
   }
 
   // ============================================
-  // HANDLE MESSAGE NAVIGATION
-  // ============================================
-  void handleMessage(RemoteMessage message, {required Profile profile}) async {
-    if (Get.currentRoute.contains('/MessagesPage')) {
-      final MessagesPageController? messagesPageController =
-          Get.isRegistered<MessagesPageController>()
-              ? Get.find<MessagesPageController>()
-              : null;
-
-      if (messagesPageController != null) {
-        if (messagesPageController.profileWaKey != profile.profileWaKey) {
-          messagesPageController.profileWaId = profile.profileWaId;
-          messagesPageController.profileWaKey = profile.profileWaKey;
-          messagesPageController.messageChatList.clear();
-          messagesPageController.userProfile.value = profile;
-          messagesPageController.currentPage.value = 1;
-          messagesPageController.loadChatsApi(
-              userKey: profile.profileWaKey, from: 'outside');
-        }
-      } else {
-        print("MessagesPageController not found, navigating to new MessagesPage.");
-      }
-    } else {
-      print("Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
-      Get.to(() =>
-          MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
-    }
-  }
-
-  // ============================================
   // iOS FOREGROUND MESSAGE SETTINGS
   // ============================================
   void iosForegroundMessage() async {
-    await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
-        alert: true, badge: true, sound: true);
+    await FirebaseMessaging.instance
+        .setForegroundNotificationPresentationOptions(
+            alert: true, badge: true, sound: true);
   }
 }

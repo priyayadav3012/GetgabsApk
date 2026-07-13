@@ -511,18 +511,18 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerRelease.entitlements;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.31;
-				FLUTTER_BUILD_NUMBER = 32;
+				FLUTTER_BUILD_NAME = 1.0.107;
+				FLUTTER_BUILD_NUMBER = 107;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.25;
+				MARKETING_VERSION = 1.0.26;
 				PRODUCT_BUNDLE_IDENTIFIER = com.getgabs.app.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -701,18 +701,18 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerDebug.entitlements;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.31;
-				FLUTTER_BUILD_NUMBER = 32;
+				FLUTTER_BUILD_NAME = 1.0.107;
+				FLUTTER_BUILD_NUMBER = 107;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.25;
+				MARKETING_VERSION = 1.0.26;
 				PRODUCT_BUNDLE_IDENTIFIER = com.getgabs.app.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -729,18 +729,18 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerRelease.entitlements;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.31;
-				FLUTTER_BUILD_NUMBER = 32;
+				FLUTTER_BUILD_NAME = 1.0.107;
+				FLUTTER_BUILD_NUMBER = 107;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.25;
+				MARKETING_VERSION = 1.0.26;
 				PRODUCT_BUNDLE_IDENTIFIER = com.getgabs.app.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";

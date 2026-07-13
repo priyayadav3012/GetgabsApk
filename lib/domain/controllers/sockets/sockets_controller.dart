@@ -1,11 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
-import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/messages_page.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
@@ -13,10 +12,12 @@ import '../../../data/get_storage/get_storage.dart';
 // import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../../data/models/active_chat_model.dart'; // Import notification package
+import '../../services/notifications_service/notification_service.dart';
 
 class SocketsController extends GetxController with WidgetsBindingObserver {
   static SocketsController instance = Get.find();
   GetStorageUserData userData = GetStorageUserData();
+  final NotificationService notificationService = NotificationService();
 
   late IO.Socket _socket;
   var isAppInForeground = true.obs;
@@ -25,102 +26,27 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
   void onInit() async {
     super.onInit();
     await _initializeSocket();
-    await initNotification(); // Initialize notifications
     WidgetsBinding.instance.addObserver(this);
   }
 
   Future<void> _initializeSocket() async {
+    String platform = Platform.isIOS ? "ios" : "android";
     var role = await userData.getUserRole();
     var userId = await userData.getLoggedInUserId();
     var userPrivilage = await userData.getUserPrivilage();
-    var adminId = role == "user" ? await userData.getParentUserId() : userId.toString();
-    // var adminId = await userData.getParentUserId();
-    // print(userPrivilage);
-    // print(adminId);
-    initializeSocket(role, userId.toString(), userPrivilage, adminId);
-  }
+    var adminId =
+        role == "user" ? await userData.getParentUserId() : userId.toString();
+    var apiKey = await userData.getApiKey();
 
-  // Local notification plugin
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
-  // Initialize local notifications
-  Future<void> initNotification() async {
-    AndroidInitializationSettings initializationSettingsAndroid =
-        const AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    var initializationSettingsIOS = DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-        onDidReceiveLocalNotification:
-            (int id, String? title, String? body, String? payload) async {});
-
-    var initializationSettings = InitializationSettings(
-        android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings,
-        onDidReceiveNotificationResponse: (payload) {
-      print("Notification clicked--");
-      checkForNotification();
-    });
-  }
-
-  void checkForNotification() async {
-    print("Notification clicked");
-
-    NotificationAppLaunchDetails? details =
-        await flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
-
-    if (details != null) {
-      if (details.didNotificationLaunchApp) {
-        NotificationResponse? response = details.notificationResponse;
-
-        if (response != null) {
-          var data = jsonDecode(response.payload!);
-          print("Original Payload: ${data.toString()}");
-
-          // Ensure data is in the expected format
-          if (data is Map<String, dynamic> && data.containsKey('data')) {
-            var messageData = data['data'];
-            if (messageData is Map<String, dynamic>) {
-              String profileWaKey = messageData['profile_wa_key'] ?? '';
-              String messageId = messageData['message_id'] ?? '';
-              int profileWaId = int.parse(data['customerprofile_wa_id']);
-              String profielName = data['customerprofilename'];
-              // Continue processing the message as needed
-              print('Profile WA Key: $profileWaKey');
-              print('Message ID: $messageId');
-              bool permission = await hasVoiceCallPermission();
-              Profile profile = Profile(
-                profileWaId: profileWaId,
-                profileWaKey: profileWaKey,
-                profileName: profielName,
-                getPendingMsgCount: 0,
-                updatedTime: DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()),
-                hasVoiceCallingPermission: false, // ya true agar permission hai
-              );
-              // Profile profile = Profile(
-              //     getPendingMsgCount: 0,
-              //     profileName: profielName,
-              //     profileWaId: profileWaId,
-              //     profileWaKey: profileWaKey);
-              // Get.to(() =>
-              //     MessagesPage(profile: profile, profileWaKey: profileWaKey));
-              navigateToMessagesPage(profile, profileWaKey);
-              // Handle message display logic here
-              // var dc = Get.find<DashboardController>();
-              // dc.refreshActiveChatList();
-            } else {
-              print('Expected a Map for messageData but got: $messageData');
-            }
-          } else {
-            print('Expected a Map for data but got: $data');
-          }
-        }
-      }
+    if (apiKey.isEmpty) {
+      debugPrint('❌ Socket initialization aborted: API key is undefined or empty');
+      return;
     }
+
+    initializeSocket(platform, role, userId.toString(), userPrivilage, adminId, apiKey);
   }
 
-  void navigateToMessagesPage(Profile profile, String newProfileWaKey) {
+  bool isOnMessagesPage(String incomingWaKey) {
     if (Get.currentRoute.contains('/MessagesPage')) {
       final MessagesPageController? messagesPageController =
           Get.isRegistered<MessagesPageController>()
@@ -128,71 +54,29 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
               : null;
 
       if (messagesPageController != null) {
-        if (messagesPageController.profileWaKey != profile.profileWaKey) {
-          messagesPageController.profileWaId = profile.profileWaId;
-          messagesPageController.profileWaKey = profile.profileWaKey;
-          messagesPageController.messageChatList.clear();
-          messagesPageController.userProfile.value = profile;
-          messagesPageController.currentPage.value = 1;
-          messagesPageController.loadChatsApi(
-              userKey: profile.profileWaKey, from: 'outside');
-        }
-      } else {
-        print(
-            "MessagesPageController not found, navigating to new MessagesPage.");
-        // Get.off(() =>
-        //     MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
+        return incomingWaKey == messagesPageController.profileWaKey;
       }
-    } else {
-      print(
-          "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
-      Get.to(() =>
-          MessagesPage(profile: profile, profileWaKey: profile.profileWaKey));
     }
-
+    return false;
   }
 
-  // Show local notification
-  Future showLocalNotifications(
-      {int id = 0, String? title, String? body, String? payLoad}) async {
-    return flutterLocalNotificationsPlugin
-        .show(id, title, body, await notificationDetails(), payload: payLoad);
-  }
-
-  notificationDetails() {
-    return const NotificationDetails(
-        android: AndroidNotificationDetails('message', 'text',
-            importance: Importance.max),
-        iOS: DarwinNotificationDetails());
-  }
-
-bool isOnMessagesPage(String incomingWaKey) {
-  if (Get.currentRoute.contains('/MessagesPage')) {
-    final MessagesPageController? messagesPageController =
-        Get.isRegistered<MessagesPageController>()
-            ? Get.find<MessagesPageController>()
-            : null;
-
-    if (messagesPageController != null) {
-      return incomingWaKey == messagesPageController.profileWaKey;
-    }
-  }
-  return false;
-}
-  void initializeSocket(
-      String userRole, String userId, int userPrivilage, var adminId) {
+  void initializeSocket(String Platform,
+      String userRole, String userId, int userPrivilage, var adminId, String apiKey) {
     _socket = IO.io(
         'https://app.getgabs.com:56000',
         IO.OptionBuilder()
-            .setTransports(['websocket'])
+            .setTransports(['websocket', 'polling'])
+            .setAuth({
+            'api_key': apiKey
+      })
             .enableForceNew()
             .build());
-
 
     _socket.on('connect', (data) {
       print('Connected to socket');
       print(data);
       var userinfo = {
+        'platform': Platform, // new parameter
         'role': userRole,
         'id': userId,
         'user_privilage': userPrivilage,
@@ -253,7 +137,6 @@ bool isOnMessagesPage(String incomingWaKey) {
 
 // final callStatus = data1['data']['callHistory']['call_status'];
 // print(callStatus);
-
 
 //   print("📞 Call Status: $callStatus");
 
@@ -333,107 +216,99 @@ bool isOnMessagesPage(String incomingWaKey) {
 //     print("❌ Socket Error: $e");
 //   }
 // });
- _socket.on('chatdata', (data) async {
-  print('Chat data socket33: $data');
-  var messageData = data['data'];
-  String name = data['customerprofilename'];
-  String mobNumber = data['customerprofile_wa_id'];
+    _socket.on('chatdata', (data) async {
+      print('Chat data socket33: $data');
+      var messageData = data['data'];
+      String name = data['customerprofilename'];
+      String mobNumber = data['customerprofile_wa_id'];
 
-    if (Get.isDialogOpen ?? false) {
-      Get.back();
-    }
-
-  try {
-    var dc = Get.find<DashboardController>();
-    // Extract profileWaKey from incoming data
-    String incomingWaKey = messageData['profile_wa_key'];
-    //int pendingMsgCount = messageData['getpendingmsg_count'];
-
-    // Find the existing profile if it exists
-    int existingIndex = dc.activeProfileDetailsList
-        .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
-
-    if (existingIndex != -1) {
-      print('exists---------------------');
-      // Profile exists, bring it to the top
-      var existingProfile = dc.activeProfileDetailsList.removeAt(existingIndex);
-      dc.activeProfileDetailsList.insert(
-        0,
-        existingProfile.copyWith(
-          getPendingMsgCount:isOnMessagesPage(incomingWaKey)?0: existingProfile.getPendingMsgCount + 1, // Update pending message count
-        ),
-      );
-    } else {
-            print('new---------------------');
-
-      // Profile does not exist, create a new one and add it to the top
-      int count = 1;
-      if(isOnMessagesPage(incomingWaKey)){
-        count = 0;
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
       }
-      
-      bool permission = await hasVoiceCallPermission();
 
-      dc.activeProfileDetailsList.insert(
-        0,
-        Profile(
-          profileWaId: int.parse(mobNumber),
-          profileWaKey: incomingWaKey,
-          profileName: name,
-          getPendingMsgCount: count,
-          updatedTime: DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()),
-          hasVoiceCallingPermission: false,
-        ),
-      );
-      // dc.activeProfileDetailsList.insert(
-      //   0,
-      //   Profile(
-      //     profileWaId:int.parse(mobNumber) ,
-      //     profileWaKey: incomingWaKey,
-      //     profileName: name,
-      //     getPendingMsgCount: count,
-      //   ),
-      // );
-    }
+      try {
+        var dc = Get.find<DashboardController>();
+        // Extract profileWaKey from incoming data
+        String incomingWaKey = messageData['profile_wa_key'];
+        //int pendingMsgCount = messageData['getpendingmsg_count'];
 
-    if (Get.currentRoute.contains('/MessagesPage')) {
-      print('Socket notifications');
-      final MessagesPageController? messagesPageController =
-          Get.isRegistered<MessagesPageController>()
-              ? Get.find<MessagesPageController>()
-              : null;
+        // Find the existing profile if it exists
+        int existingIndex = dc.activeProfileDetailsList
+            .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
 
-      if (messagesPageController != null) {
-        if (incomingWaKey != messagesPageController.profileWaKey) {
-       //   dc.refreshActiveChatList();
-          handleNotification(data);
+        if (existingIndex != -1) {
+          print('exists---------------------');
+          // Profile exists, bring it to the top
+          var existingProfile =
+              dc.activeProfileDetailsList.removeAt(existingIndex);
+          dc.activeProfileDetailsList.insert(
+            0,
+            existingProfile.copyWith(
+              getPendingMsgCount: isOnMessagesPage(incomingWaKey)
+                  ? 0
+                  : existingProfile.getPendingMsgCount +
+                      1, // Update pending message count
+            ),
+          );
         } else {
-          if (!isAppInForeground.value) {
-          //  dc.refreshActiveChatList();
-            handleNotification(data);
+          print('new---------------------');
+
+          // Profile does not exist, create a new one and add it to the top
+          int count = 1;
+          if (isOnMessagesPage(incomingWaKey)) {
+            count = 0;
           }
+
+          dc.activeProfileDetailsList.insert(
+            0,
+            Profile(
+              profileWaId: int.parse(mobNumber),
+              profileWaKey: incomingWaKey,
+              profileName: name,
+              getPendingMsgCount: count,
+              updatedTime:
+                  DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()),
+              hasVoiceCallingPermission: false,
+            ),
+          );
+          // dc.activeProfileDetailsList.insert(
+          //   0,
+          //   Profile(
+          //     profileWaId:int.parse(mobNumber) ,
+          //     profileWaKey: incomingWaKey,
+          //     profileName: name,
+          //     getPendingMsgCount: count,
+          //   ),
+          // );
         }
+
+        if (Get.currentRoute.contains('/MessagesPage')) {
+          print('Socket notifications');
+          final MessagesPageController? messagesPageController =
+              Get.isRegistered<MessagesPageController>()
+                  ? Get.find<MessagesPageController>()
+                  : null;
+
+          if (messagesPageController != null) {
+            if (incomingWaKey != messagesPageController.profileWaKey) {
+              //   dc.refreshActiveChatList();
+              handleNotification(data);
+            } else {
+              if (!isAppInForeground.value) {
+                //  dc.refreshActiveChatList();
+                handleNotification(data);
+              }
+            }
+          }
+        } else {
+          //  dc.refreshActiveChatList();
+          handleNotification(data);
+        }
+      } catch (e) {
+        print(e);
       }
-    } else {
-    //  dc.refreshActiveChatList();
-      handleNotification(data);
-    }
-  } catch (e) {
-    print(e);
+    });
   }
-});
-
-  }
-
-
-
-
-
-
-
-
-
-  
 
   void handleNotification(dynamic data) {
     String messageType = data['data']['message_type'];
@@ -462,10 +337,10 @@ bool isOnMessagesPage(String incomingWaKey) {
         break;
     }
     if (isAppInForeground.value) {
-      showLocalNotifications(
+      notificationService.showChatNotification(
         title: title,
         body: body,
-        payLoad: payLoad,
+        payload: payLoad,
       );
     }
   }
@@ -494,7 +369,8 @@ bool isOnMessagesPage(String incomingWaKey) {
       required String profileWaKey}) {
     var data = {
       'role': role,
-      'id': userId.toString(), // ensure id is sent as string to match connect payload
+      'id': userId
+          .toString(), // ensure id is sent as string to match connect payload
       'admin_id': adminId,
       'message_id': messageId,
       'profile_wa_key': profileWaKey

@@ -5,9 +5,11 @@
 *.swp
 .DS_Store
 .atom/
+.build/
 .buildlog/
 .history
 .svn/
+.swiftpm/
 migrate_working_dir/
 
 # IntelliJ related
@@ -46,7 +48,7 @@ app.*.map.json
 # IMPORTANT: These contain API keys and should never be committed
 **/google-services.json
 **/GoogleService-Info.plist
-# firebase.json
+firebase.json
 firebase1.json
 lib/firebase_options.dart
 

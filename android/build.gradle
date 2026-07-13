@@ -1,25 +1,56 @@
-buildscript {
-    ext.kotlin_version = "2.2.0"
-    // ext.kotlin_version = '2.1.0' // or newer
+// buildscript {
+//     ext.kotlin_version = "2.2.0"
+//     // ext.kotlin_version = '2.1.0' // or newer
     
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath("com.google.gms:google-services:4.4.0")
-    }
-}
+//     repositories {
+//         google()
+//         mavenCentral()
+//     }
+//     dependencies {
+//         classpath("com.google.gms:google-services:4.4.0")
+//     }
+// }
+// allprojects {
+//     repositories {
+//         google()
+//         mavenCentral()
+//     }
+
+//     // Add this part ------------>
+//     subprojects {
+//         afterEvaluate { project ->
+//             if (project.hasProperty('android')) {
+//                 project.android {
+//                     if (namespace == null) {
+//                         namespace project.group
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//     // Add this part ^^^^^^^^^^^
+// }
+
+// rootProject.buildDir = "../build"
+// subprojects {
+//     project.buildDir = "${rootProject.buildDir}/${project.name}"
+// }
+// subprojects {
+//     project.evaluationDependsOn(":app")
+// }
+
+// tasks.register("clean", Delete) {
+//     delete rootProject.buildDir
+// }
 allprojects {
     repositories {
         google()
         mavenCentral()
     }
 
-    // Add this part ------------>
     subprojects {
         afterEvaluate { project ->
-            if (project.hasProperty('android')) {
+            if (project.hasProperty("android")) {
                 project.android {
                     if (namespace == null) {
                         namespace project.group
@@ -28,14 +59,12 @@ allprojects {
             }
         }
     }
-    // Add this part ^^^^^^^^^^^
 }
 
 rootProject.buildDir = "../build"
+
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
-}
-subprojects {
     project.evaluationDependsOn(":app")
 }
 

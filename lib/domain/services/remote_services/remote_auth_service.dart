@@ -11,7 +11,7 @@ class RemoteAuthService {
   final _apiService = NetworkApiServices();
 
   Future<dynamic> loginWithEmailApiService(var data) async {
-    dynamic response = _apiService.postApi(data, ApiEndPoints.baseUrl+ApiEndPoints.authEndpoints.loginWithEmailUrl);
+    dynamic response = _apiService.postApi(data, ApiEndPoints.loginBaseUrl+ApiEndPoints.authEndpoints.loginWithEmailUrl);
     return response;
   }
  Future<dynamic> saveVoipTokenService(var data, String tokenKey) async {

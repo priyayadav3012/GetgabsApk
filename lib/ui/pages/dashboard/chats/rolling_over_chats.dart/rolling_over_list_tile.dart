@@ -18,8 +18,14 @@ class RollingOverListTile extends StatelessWidget {
   static bool get _isMessagedly =>
       LoginWithEmailController.currentFlavor == 'messagedly';
 
-  static Color get _brandColor =>
-      _isMessagedly ? const Color(0xff4242D4) : const Color(0xFF25D366);
+  static bool get _isScalewiz =>
+      LoginWithEmailController.currentFlavor == 'scalewiz';
+
+  static Color get _brandColor => _isMessagedly
+      ? const Color(0xff4242D4)
+      : _isScalewiz
+          ? const Color(0xff17A398)
+          : const Color(0xFF25D366);
 
   @override
   Widget build(BuildContext context) {
