@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
@@ -239,6 +240,51 @@ class DashboardController extends GetxController {
     rollingOverChatListApi(increment: increment);
   }
 
+  /// The backend does not return either chat list sorted by recent
+  /// activity, so a fresh fetch (initial load, pull-to-refresh, or a new
+  /// page) can put an already-recent chat below older ones. Re-sorting
+  /// client-side after every fetch keeps "most recent first" true even
+  /// across a full refresh, not just the live socket/send-time bump.
+  DateTime _parseUpdatedTime(String value) =>
+      DateTime.tryParse(value) ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _sortActiveByRecency() {
+    activeProfileDetailsList.sort((a, b) =>
+        _parseUpdatedTime(b.updatedTime).compareTo(_parseUpdatedTime(a.updatedTime)));
+  }
+
+  void _sortRollingOverByRecency() {
+    rollingOverProfileDetailsList.sort((a, b) =>
+        _parseUpdatedTime(b.updatedTime).compareTo(_parseUpdatedTime(a.updatedTime)));
+  }
+
+  /// Moves [profileWaKey]'s chat to the top of whichever list (active or
+  /// rolling-over) it currently belongs to and refreshes its timestamp —
+  /// mirrors WhatsApp's "most recent activity floats to top" behavior for
+  /// both sending and receiving a message. No-op if the chat isn't in
+  /// either list (a brand-new incoming chat is created directly by the
+  /// socket handler, which has extra fields — name/id — this doesn't).
+  void bumpChatOnNewActivity(String profileWaKey, {String? updatedTime}) {
+    final time = updatedTime ??
+        DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
+
+    final activeIndex = activeProfileDetailsList
+        .indexWhere((p) => p.profileWaKey == profileWaKey);
+    if (activeIndex != -1) {
+      final profile = activeProfileDetailsList.removeAt(activeIndex);
+      activeProfileDetailsList.insert(0, profile.copyWith(updatedTime: time));
+      return;
+    }
+
+    final rollingIndex = rollingOverProfileDetailsList
+        .indexWhere((p) => p.profileWaKey == profileWaKey);
+    if (rollingIndex != -1) {
+      final profile = rollingOverProfileDetailsList.removeAt(rollingIndex);
+      rollingOverProfileDetailsList.insert(
+          0, profile.copyWith(updatedTime: time));
+    }
+  }
+
   void markChatAsRead(String profileWaKey) {
     final index = activeProfileDetailsList.indexWhere(
       (e) => e.profileWaKey == profileWaKey,
@@ -410,6 +456,7 @@ class DashboardController extends GetxController {
             activeProfileDetailsList.addAll(
                 profileData.map((datas) => Profile.fromJson(datas)).toList());
           }
+          _sortActiveByRecency();
           activeProfileDetailsList.refresh();
 
           if (profileData.isNotEmpty) {
@@ -476,6 +523,8 @@ class DashboardController extends GetxController {
                 .map((datas) => RollingOverChatModel.fromJson(datas))
                 .toList());
           }
+          _sortRollingOverByRecency();
+          rollingOverProfileDetailsList.refresh();
 
           if (profileData.isNotEmpty) {
             rollingOverCurrentPage++;

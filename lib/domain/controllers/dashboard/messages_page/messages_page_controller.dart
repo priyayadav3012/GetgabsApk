@@ -899,6 +899,10 @@ if (Get.isRegistered<DashboardController>()) {
     messageChatList.insert(0, newMessage);
     groupedMessages.assignAll(groupMessagesByDate(messageChatList));
 
+    if (Get.isRegistered<DashboardController>()) {
+      Get.find<DashboardController>().bumpChatOnNewActivity(profileWaKey);
+    }
+
     sendMessageApi(customerKey, tempMessageId);
   }
 
@@ -956,6 +960,11 @@ if (Get.isRegistered<DashboardController>()) {
     messageChatList.insert(0, newMessage); // Insert at the beginning
 
     groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+
+    if (Get.isRegistered<DashboardController>()) {
+      Get.find<DashboardController>().bumpChatOnNewActivity(profileWaKey);
+    }
+
     sendMessageWithMedia(
         media, caption, isVideo, customerKey, tempMessageId, isDocument);
   }

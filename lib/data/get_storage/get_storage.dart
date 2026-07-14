@@ -193,6 +193,38 @@ Future<String> getApiKey() async {
     return storedData['role'];
   }
 
+  /// Returns the identity id that should be used to join the LIVE call
+  /// socket — mirrors the topic selection in
+  /// NotificationService.getUserTopic()/onInitTopic(), where a privilege-1
+  /// sub-user (or a 'manager') listens on the admin's call channel instead
+  /// of their own, since the WhatsApp Business number belongs to the admin.
+  Future<int> getCallSocketIdentityId() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final storedDataJson = box.read('responseData');
+    if (storedDataJson == null) return await getLoggedInUserId();
+
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      final role = storedData['role'];
+      final privilege = storedData['user_privilage'];
+      final ownId = await getLoggedInUserId();
+      final adminId = int.tryParse(storedData['admin_id']?.toString() ?? '') ?? 0;
+
+      switch (role) {
+        case 'manager':
+          return adminId > 0 ? adminId : ownId;
+        case 'sub-user':
+          return (privilege == 1 && adminId > 0) ? adminId : ownId;
+        default: // 'user'
+          return ownId;
+      }
+    } catch (e) {
+      debugPrint('❌ getCallSocketIdentityId error: $e');
+      return await getLoggedInUserId();
+    }
+  }
+
   Future<String> getParentUserId() async {
     final box = GetStorage();
     await box.initStorage;

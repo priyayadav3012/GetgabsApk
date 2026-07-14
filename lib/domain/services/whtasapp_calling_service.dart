@@ -45,6 +45,12 @@ class WhatsAppCallingService {
   final int adminId;
   final String userRole;
   final String businessApiKey;
+  // Identity used to join the live call socket. For most users this equals
+  // userId; for a privilege-1 sub-user (or 'manager') it's the admin's id,
+  // since the WhatsApp Business number's incoming-call events are routed to
+  // whoever owns it. userId itself is left untouched everywhere else
+  // (HTTP call attribution — callerId/acceptedBy — must stay the real actor).
+  final int socketUserId;
 
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -148,7 +154,8 @@ class WhatsAppCallingService {
     required this.adminId,
     required this.userRole,
     required this.businessApiKey,
-  });
+    int? socketUserId,
+  }) : socketUserId = socketUserId ?? userId;
 
   String? get pendingSdp => _pendingSdp;
   String? get pendingCallId => _pendingCallId;
@@ -236,7 +243,7 @@ class WhatsAppCallingService {
       socketUrl,
       IO.OptionBuilder()
           .setTransports(['polling'])
-          .setAuth({'userId': userId, 'role': userRole})
+          .setAuth({'userId': socketUserId, 'adminId': adminId, 'role': userRole})
           .enableAutoConnect()
           .enableReconnection()
           .setReconnectionAttempts(999)
@@ -2009,6 +2016,7 @@ class GlobalCallListenerService {
     required int userId,
     required int adminId,
     required String businessApiKey,
+    int? socketUserId,
   }) async {
     // Guard against concurrent calls (e.g. onReady + onIncomingVoipCall racing).
     if (_isInitializing) {
@@ -2059,6 +2067,7 @@ class GlobalCallListenerService {
         adminId: adminId,
         userRole: 'agent',
         businessApiKey: businessApiKey,
+        socketUserId: socketUserId,
       );
       _service!.isGlobalListener = true;
       await _service!.initialize();
