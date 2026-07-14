@@ -236,6 +236,13 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
         int existingIndex = dc.activeProfileDetailsList
             .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
 
+        final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
+
+        // Also check the rolling-over (closed) tab — previously only the
+        // active tab ever reordered/refreshed on a live incoming message.
+        int existingRollingIndex = dc.rollingOverProfileDetailsList
+            .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
+
         if (existingIndex != -1) {
           print('exists---------------------');
           // Profile exists, bring it to the top
@@ -248,6 +255,20 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
                   ? 0
                   : existingProfile.getPendingMsgCount +
                       1, // Update pending message count
+              updatedTime: nowStr,
+            ),
+          );
+        } else if (existingRollingIndex != -1) {
+          print('exists in rolling-over---------------------');
+          var existingRollingProfile =
+              dc.rollingOverProfileDetailsList.removeAt(existingRollingIndex);
+          dc.rollingOverProfileDetailsList.insert(
+            0,
+            existingRollingProfile.copyWith(
+              getPendingMsgCount: isOnMessagesPage(incomingWaKey)
+                  ? 0
+                  : existingRollingProfile.getPendingMsgCount + 1,
+              updatedTime: nowStr,
             ),
           );
         } else {
@@ -266,8 +287,7 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
               profileWaKey: incomingWaKey,
               profileName: name,
               getPendingMsgCount: count,
-              updatedTime:
-                  DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()),
+              updatedTime: nowStr,
               hasVoiceCallingPermission: false,
             ),
           );

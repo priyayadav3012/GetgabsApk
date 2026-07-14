@@ -630,6 +630,18 @@ class WhatsAppCallingConfig {
     }
   }
 
+  // Identity to join the LIVE call socket with — see
+  // GetStorageUserData.getCallSocketIdentityId() for why this can differ
+  // from getUserId() (privilege-1 sub-users listen on the admin's channel).
+  static Future<int> getSocketIdentityId() async {
+    try {
+      final id = await _userData.getCallSocketIdentityId();
+      return id > 0 ? id : await getUserId();
+    } catch (e) {
+      return await getUserId();
+    }
+  }
+
   // ============================================
   // INITIALIZE CALL LISTENER
   // ============================================
@@ -637,10 +649,14 @@ class WhatsAppCallingConfig {
     final userId = await getUserId();
     final adminId = await getAdminId();
     final apiKey = await getBusinessApiKey();
+    final socketUserId = await getSocketIdentityId();
     if (userId > 0) {
       await GlobalCallListenerService.instance.initialize(
-          userId: userId, adminId: adminId, businessApiKey: apiKey);
-      debugPrint('✅ Call listener initialized');
+          userId: userId,
+          adminId: adminId,
+          businessApiKey: apiKey,
+          socketUserId: socketUserId);
+      debugPrint('✅ Call listener initialized (socketUserId=$socketUserId)');
     }
   }
 
