@@ -74,6 +74,20 @@ class _PartnersEndPoints {
       "https://app.getgabs.com/partners/getSessionToken";
   final String addCustomerUrl =
       "https://app.getgabs.com/partners/managechat/chat/add-customer";
+
+  // ✅ Assign Chat (Agent / Co-Assign / Team) — see postman/assign_chat_apis.postman_collection.json
+  final String fetchExecutiveListUrl =
+      "https://app.getgabs.com/partners/settings/fetchExecutiveList";
+  final String listTeamsUrl =
+      "https://app.getgabs.com/partners/settings/teams";
+  final String getCoAssigneesUrl =
+      "https://app.getgabs.com/partners/managechat/customermanage/get-coassignees";
+  final String addCoAssignUrl =
+      "https://app.getgabs.com/partners/managechat/customermanage/coassign";
+  final String updateLastSummaryUrl =
+      "https://app.getgabs.com/partners/managechat/customermanage/updatelastshortsummery";
+  final String assignTeamUrl =
+      "https://app.getgabs.com/partners/managechat/assign-to-team";
 }
 
 // ============================================

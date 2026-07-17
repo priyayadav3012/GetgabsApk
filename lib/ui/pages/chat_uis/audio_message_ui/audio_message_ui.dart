@@ -38,7 +38,7 @@ class AudioController extends GetxController {
   }
 }
 
-class AudioMessageUi extends StatelessWidget {
+class AudioMessageUi extends StatefulWidget {
   final String audioUrl;
   final bool isSentByMe;
   final DateTime createdAt;
@@ -61,23 +61,47 @@ class AudioMessageUi extends StatelessWidget {
   });
 
   @override
+  State<AudioMessageUi> createState() => _AudioMessageUiState();
+}
+
+class _AudioMessageUiState extends State<AudioMessageUi> {
+  late final AudioController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // Tagged by audioUrl — without a tag, Get.put() with an already-registered
+    // type just returns the FIRST-ever AudioController instead of creating a
+    // new one, so every audio bubble in the chat ended up sharing one
+    // AudioPlayer/isPlaying state (play one, all of them show "playing").
+    controller = Get.put(AudioController(widget.audioUrl), tag: widget.audioUrl);
+  }
+
+  @override
+  void dispose() {
+    Get.delete<AudioController>(tag: widget.audioUrl);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final controller = Get.put(AudioController(audioUrl));
+    final audioUrl = widget.audioUrl;
+    final mediaQuery = widget.mediaQuery;
  return BaseMessageUi(
-        isSentByMe: isSentByMe,
-        createdAt: createdAt,
+        isSentByMe: widget.isSentByMe,
+        createdAt: widget.createdAt,
         mediaQuery: mediaQuery,
-        isInTemplate: isInTemplate,
-        deliveryStatus: deliveryStatus,
+        isInTemplate: widget.isInTemplate,
+        deliveryStatus: widget.deliveryStatus,
         child: Container(
       margin: EdgeInsets.only(
-        right: rightMargin,
-        left: leftMargin,
+        right: widget.rightMargin,
+        left: widget.leftMargin,
         top: mediaQuery.height * 0.01,
       ),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: isSentByMe ? Colors.blue[200] : Colors.grey[300],
+        color: widget.isSentByMe ? Colors.blue[200] : Colors.grey[300],
         borderRadius: BorderRadius.circular(8.0),
       ),
       child: Row(

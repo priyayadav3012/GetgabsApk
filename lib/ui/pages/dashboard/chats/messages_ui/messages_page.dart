@@ -11,6 +11,8 @@ import 'package:getgabs/ui/pages/chat_uis/contact_message_ui/contact_message_ui.
 import 'package:getgabs/ui/pages/chat_uis/interactive_message/interactive_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/templete_message_uis/templete_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/shortmessagesheet.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:image_picker/image_picker.dart';
@@ -23,6 +25,7 @@ import '../../../chat_uis/button_message_ui.dart';
 import '../../../chat_uis/document_message/document_message_ui.dart';
 import '../../../chat_uis/image_message_ui/image_message_ui.dart';
 import '../../../chat_uis/location_message_ui/location_message_ui.dart';
+import '../../../chat_uis/note_message_ui/note_message_ui.dart';
 import '../../../chat_uis/order_message/order_message_ui.dart';
 import '../../../chat_uis/reply_message/reply_message_ui.dart';
 import '../../../chat_uis/text_message_ui.dart';
@@ -58,12 +61,23 @@ class MessagesPage extends StatelessWidget {
             messagesPageController.currentPage.value = 1;
           },
         ),
-        title: Obx(() => Row(
-              // Wrap the reactive part in Obx
+        title: Obx(() {
+          // Same colored-initials style as the chat list avatar, instead of
+          // a ui-avatars.com network image (which showed as plain grey while
+          // loading/on failure since CircleAvatar has no fallback color).
+          final safeName = cleanName(
+              messagesPageController.userProfile.value.profileName);
+          return Row(
               children: [
                 CircleAvatar(
-                  backgroundImage: NetworkImage(
-                    'https://ui-avatars.com/api/?name=${messagesPageController.replaceFirstTwoSpaces(messagesPageController.userProfile.value.profileName)}',
+                  backgroundColor: getAvatarBgColor(safeDecode(safeName)),
+                  child: Text(
+                    getInitialsSafe(safeName),
+                    style: TextStyle(
+                      color: getAvatarTextColor(safeDecode(safeName)),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 SizedBox(width: mediaQuery.width * 0.025),
@@ -86,49 +100,9 @@ class MessagesPage extends StatelessWidget {
                   ),
                 ),
               ],
-            )),
+            );
+        }),
         actions: [
-          Obx(() => IconButton(
-                onPressed: messagesPageController.isAiToggleLoading.value
-                    ? null // disabled while API call is in progress
-                    : () => messagesPageController.toggleAiPause(),
-                icon: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: messagesPageController.isAiPaused.value
-                        ? const Color(0xFFFF5722).withOpacity(0.1)
-                        : const Color(0xFF2196F3).withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: messagesPageController.isAiToggleLoading.value
-                      // Loading spinner while API call is in progress
-                      ? SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: messagesPageController.isAiPaused.value
-                                ? const Color(0xFFFF5722)
-                                : const Color(0xFF2196F3),
-                          ),
-                        )
-                      // Normal icon
-                      : Icon(
-                          messagesPageController.isAiPaused.value
-                              ? Icons.play_circle_outline // Resume AI
-                              : Icons.pause_circle_outline, // Pause AI
-                          color: messagesPageController.isAiPaused.value
-                              ? const Color(0xFFFF5722)
-                              : const Color(0xFF2196F3),
-                          size: 20,
-                        ),
-                ),
-                tooltip: messagesPageController.isAiToggleLoading.value
-                    ? 'Updating...'
-                    : messagesPageController.isAiPaused.value
-                        ? 'Resume AI'
-                        : 'Pause AI',
-              )),
           // Call Button - Opens WhatsApp-style calling
           IconButton(
             onPressed: () {
@@ -151,6 +125,90 @@ class MessagesPage extends StatelessWidget {
               ),
             ),
             tooltip: 'Call',
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More options',
+            offset: const Offset(0, 45),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            icon: Obx(() => Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: messagesPageController.isAiPaused.value
+                        ? const Color(0xFFFF5722).withOpacity(0.1)
+                        : AppTheme.greyColor.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: messagesPageController.isAiToggleLoading.value
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          Icons.more_vert,
+                          color: messagesPageController.isAiPaused.value
+                              ? const Color(0xFFFF5722)
+                              : AppTheme.blackColor,
+                          size: 20,
+                        ),
+                )),
+            onSelected: (value) {
+              if (value == 'toggle_ai') {
+                if (!messagesPageController.isAiToggleLoading.value) {
+                  messagesPageController.toggleAiPause();
+                }
+              } else if (value == 'assign_chat') {
+                showAssignToTeammateDialog(
+                  customerKey: profileWaKey,
+                  customerName:
+                      messagesPageController.userProfile.value.profileName,
+                  customerPhone: messagesPageController
+                      .userProfile.value.profileWaId
+                      .toString(),
+                  messagesPageController: messagesPageController,
+                  isAlreadyAssignedToAgent: messagesPageController
+                          .userProfile.value.assignedUserId !=
+                      null,
+                  currentAssignedAgentId:
+                      messagesPageController.userProfile.value.assignedUserId,
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'toggle_ai',
+                child: Row(
+                  children: [
+                    Icon(
+                      messagesPageController.isAiPaused.value
+                          ? Icons.play_circle_outline // Resume AI
+                          : Icons.pause_circle_outline, // Pause AI
+                      color: messagesPageController.isAiPaused.value
+                          ? const Color(0xFFFF5722)
+                          : const Color(0xFF2196F3),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(messagesPageController.isAiPaused.value
+                        ? 'Resume AI'
+                        : 'Pause AI'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'assign_chat',
+                child: Row(
+                  children: [
+                    Icon(Icons.person_add_alt_1,
+                        color: AppTheme.blackColor, size: 18),
+                    SizedBox(width: 10),
+                    Text('Assign Chat'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -649,6 +707,8 @@ if (message.messageType == 'text') {
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
+    } else if (message.messageType == 'note') {
+      return NoteMessageUi(message: message, mediaQuery: mediaQuery);
     } else {
       // Unrecognized messageType (e.g. an auto-generated/system message
       // whose type isn't one of the cases above) used to render as a

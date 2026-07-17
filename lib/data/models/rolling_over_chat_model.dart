@@ -6,6 +6,14 @@ class RollingOverChatModel {
   final String updatedTime;
   final bool hasVoiceCallingPermission;
 
+  // ✅ Assignment state — same fields as active_chat_model.dart's Profile,
+  // needed so the rolling-over → MessageRollingPage conversion in
+  // rolling_over_list_tile.dart can carry them through to the Assign dialog.
+  final int? assignedUserId;
+  final String? assignedUserName;
+  final int? assignedTeamId;
+  final String? assignedTeamName;
+
   RollingOverChatModel({
     required this.profileWaId,
     required this.profileWaKey,
@@ -13,6 +21,10 @@ class RollingOverChatModel {
     required this.getPendingMsgCount,
     required this.updatedTime,
     required this.hasVoiceCallingPermission,
+    this.assignedUserId,
+    this.assignedUserName,
+    this.assignedTeamId,
+    this.assignedTeamName,
   });
 
   factory RollingOverChatModel.fromJson(Map<String, dynamic> json) {
@@ -34,6 +46,12 @@ class RollingOverChatModel {
 
       hasVoiceCallingPermission:
           json['hasVoiceCallingPermission']?.toString().toLowerCase() == "yes",
+
+      assignedUserId: int.tryParse(json['assigned_user']?.toString() ?? ''),
+      assignedUserName: json['assigned_user_name']?.toString(),
+      assignedTeamId:
+          int.tryParse(json['assigned_team_id']?.toString() ?? ''),
+      assignedTeamName: json['assigned_team_name']?.toString(),
     );
   }
 
@@ -46,6 +64,10 @@ class RollingOverChatModel {
       'updatedtime': updatedTime,
       'hasVoiceCallingPermission':
           hasVoiceCallingPermission ? "yes" : "no",
+      'assigned_user': assignedUserId,
+      'assigned_user_name': assignedUserName,
+      'assigned_team_id': assignedTeamId,
+      'assigned_team_name': assignedTeamName,
     };
   }
 
@@ -56,6 +78,10 @@ class RollingOverChatModel {
     int? getPendingMsgCount,
     String? updatedTime,
     bool? hasVoiceCallingPermission,
+    int? assignedUserId,
+    String? assignedUserName,
+    int? assignedTeamId,
+    String? assignedTeamName,
   }) {
     return RollingOverChatModel(
       profileWaId: profileWaId ?? this.profileWaId,
@@ -66,6 +92,10 @@ class RollingOverChatModel {
       updatedTime: updatedTime ?? this.updatedTime,
       hasVoiceCallingPermission:
           hasVoiceCallingPermission ?? this.hasVoiceCallingPermission,
+      assignedUserId: assignedUserId ?? this.assignedUserId,
+      assignedUserName: assignedUserName ?? this.assignedUserName,
+      assignedTeamId: assignedTeamId ?? this.assignedTeamId,
+      assignedTeamName: assignedTeamName ?? this.assignedTeamName,
     );
   }
 }

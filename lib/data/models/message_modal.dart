@@ -25,6 +25,11 @@ class Message {
   final String? callStatus;
   final String? callType;
 final String? direction;
+
+  // ✅ Note Fields (Assign/Co-Assign/Team-Assign responses — message_type == 'note')
+  final String? noteCreatedBy;
+  final String? noteType;
+
   Message({
     required this.id,
     required this.messageText,
@@ -50,6 +55,10 @@ final String? direction;
     this.callStatus,
     this.callType,
     this.direction,
+
+    // ✅ Note
+    this.noteCreatedBy,
+    this.noteType,
   });
 
   bool get isSentByMe => sender != 1;
@@ -87,6 +96,10 @@ final String? direction;
     String? callStatus,
     String? callType,
     String? direction,
+
+    // ✅ Note
+    String? noteCreatedBy,
+    String? noteType,
   }) {
     return Message(
       id: id ?? this.id,
@@ -112,14 +125,21 @@ final String? direction;
       callStatus: callStatus ?? this.callStatus,
       callType: callType ?? this.callType,
       direction: direction ?? this.direction,
+      noteCreatedBy: noteCreatedBy ?? this.noteCreatedBy,
+      noteType: noteType ?? this.noteType,
     );
   }
 
   factory Message.fromJson(Map<String, dynamic> json) {
     return Message(
       id: json['id'] ?? 0,
-      messageText: json['message_text'] ?? '',
-      messageId: json['message_id']?.toString() ?? '',
+      // Regular messages use 'message_text'; the Assign/Co-Assign/Team-Assign
+      // "note" API responses (see postman/assign_chat_apis.postman_collection.json)
+      // use 'content' instead — fall back to it so a note object can be fed
+      // straight into Message.fromJson without a separate adapter.
+      messageText: json['message_text'] ?? json['content'] ?? '',
+      messageId: json['message_id']?.toString() ??
+          (json['id'] != null ? 'note_${json['id']}' : ''),
       messageType: json['message_type'] ?? '',
       isAutoreply: (json['is_autoreply'] ?? "no") == "yes",
       captionText: json['caption_text'] ?? '',
@@ -147,6 +167,10 @@ final String? direction;
       // ✅ Voice Call Data
       callDurationSeconds:
           json['call_duration_seconds'] ?? 0,
+
+      // ✅ Note Data
+      noteCreatedBy: json['note_created_by'] ?? '',
+      noteType: json['note_type'] ?? '',
 
       callStatus:
           json['call_status'] ?? '',
@@ -183,6 +207,10 @@ final String? direction;
       'call_duration_seconds': callDurationSeconds,
       'call_status': callStatus,
       'message_sub_type': callType,
+
+      // ✅ Note
+      'note_created_by': noteCreatedBy,
+      'note_type': noteType,
     };
   }
 }

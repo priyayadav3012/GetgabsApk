@@ -10,6 +10,7 @@ import 'package:getgabs/ui/pages/chat_uis/image_message_ui/image_message_ui.dart
 import 'package:getgabs/ui/pages/chat_uis/templete_message_uis/templete_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/text_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/rolling_over_chats.dart/rolling_message_ui/send_template.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 
@@ -19,6 +20,7 @@ import '../../../../chat_uis/base_message_ui.dart';
 import '../../../../chat_uis/button_message_ui.dart';
 import '../../../../chat_uis/document_message/document_message_ui.dart';
 import '../../../../chat_uis/location_message_ui/location_message_ui.dart';
+import '../../../../chat_uis/note_message_ui/note_message_ui.dart';
 import '../../../../chat_uis/order_message/order_message_ui.dart';
 import '../../../../chat_uis/reply_message/reply_message_ui.dart';
 
@@ -88,7 +90,22 @@ class MessageRollingPage extends StatelessWidget {
                 messagesPageController.openDialPad(
                     url: 'tel: ${rollingOverChatModel.profileWaId}');
               },
-              icon: const Icon(Icons.call))
+              icon: const Icon(Icons.call)),
+          IconButton(
+            onPressed: () {
+              showAssignToTeammateDialog(
+                customerKey: profileWaKey,
+                customerName: rollingOverChatModel.profileName,
+                customerPhone: rollingOverChatModel.profileWaId.toString(),
+                messagesPageController: messagesPageController,
+                isAlreadyAssignedToAgent:
+                    rollingOverChatModel.assignedUserId != null,
+                currentAssignedAgentId: rollingOverChatModel.assignedUserId,
+              );
+            },
+            icon: const Icon(Icons.person_add_alt_1),
+            tooltip: 'Assign Chat',
+          ),
         ],
 //         actions: [
 //           IconButton(onPressed: () {}, icon: const Icon(Icons.search)),
@@ -387,6 +404,8 @@ class MessageRollingPage extends StatelessWidget {
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
+    } else if (message.messageType == 'note') {
+      return NoteMessageUi(message: message, mediaQuery: mediaQuery);
     } else {
       return BaseMessageUi(
         isSentByMe: message.sender == 1 ? false : true,
