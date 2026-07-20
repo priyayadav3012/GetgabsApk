@@ -40,8 +40,17 @@ class GetStorageUserData extends GetxController {
     final box = GetStorage();
     await box.initStorage;
     final storedDataJson = box.read('responseData');
-    final Map<String, dynamic> storedData = json.decode(storedDataJson);
-    return storedData['user_privilage'];
+    if (storedDataJson == null) {
+      debugPrint('⚠️ getUserPrivilage: responseData is null in storage');
+      return 0;
+    }
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      return storedData['user_privilage'] ?? 0;
+    } catch (e) {
+      debugPrint('❌ getUserPrivilage error: $e');
+      return 0;
+    }
   }
 
   /// Returns the general auth api_key (used for socket auth).
@@ -189,8 +198,17 @@ Future<String> getApiKey() async {
     final box = GetStorage();
     await box.initStorage;
     final storedDataJson = box.read('responseData');
-    final Map<String, dynamic> storedData = json.decode(storedDataJson);
-    return storedData['role'];
+    if (storedDataJson == null) {
+      debugPrint('⚠️ getUserRole: responseData is null in storage');
+      return '';
+    }
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      return storedData['role'] ?? '';
+    } catch (e) {
+      debugPrint('❌ getUserRole error: $e');
+      return '';
+    }
   }
 
   /// Returns the current logged-in user's username, for the "usernameIs"

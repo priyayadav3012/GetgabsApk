@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/rolling_over_chat_model.dart';
 import 'package:getgabs/domain/controllers/sockets/sockets_controller.dart';
@@ -201,6 +202,44 @@ class DashboardController extends GetxController {
 
     activeChatListApi();
     rollingOverChatListApi();
+
+    _startNewMessageFlagPoll();
+  }
+
+  Timer? _newMessageFlagPollTimer;
+
+  /// Some devices route an incoming-message FCM push through the background
+  /// isolate (_firebaseMessagingBackgroundHandler) even while this chat app
+  /// is genuinely in the foreground — a known Android/FCM quirk unrelated to
+  /// what the user is actually looking at. That isolate can't touch this
+  /// isolate's GetX state directly, so it just flips a SharedPreferences
+  /// flag. Previously that flag was only consumed when the app *lifecycle*
+  /// transitioned to resumed, so if no such transition happened (chat stayed
+  /// open the whole time) the flag sat unread and the open chat never
+  /// refreshed. Polling here catches it regardless of lifecycle state.
+  void _startNewMessageFlagPoll() {
+    _newMessageFlagPollTimer?.cancel();
+    _newMessageFlagPollTimer =
+        Timer.periodic(const Duration(seconds: 2), (_) => _consumeNewMessageFlag());
+  }
+
+  Future<void> _consumeNewMessageFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    // getInstance() returns a process-wide cached instance after the first
+    // call — it does NOT see writes made by the background FCM isolate
+    // until explicitly reloaded, so without this the flag below would keep
+    // reading whatever was cached at this isolate's very first prefs access.
+    await prefs.reload();
+    if (!(prefs.getBool('has_new_messages_to_refresh') ?? false)) return;
+    await prefs.setBool('has_new_messages_to_refresh', false);
+    debugPrint('🔄 [flag-poll] has_new_messages_to_refresh consumed — refreshing chat list');
+
+    // Refreshing the currently-open chat's own messages (if any) is handled
+    // by MessagesPageController's own poll of this same flag — Get.find
+    // here proved unreliable at reliably locating the live instance even
+    // while that screen was clearly open and active.
+    refreshActiveChatList(increment: 'replace');
+    refreshRollingOverChatList(increment: 'replace');
   }
 
   void _scrollListener() {
@@ -698,6 +737,7 @@ class DashboardController extends GetxController {
     // Dispose call listener when dashboard closes
     GlobalCallListenerService.instance.dispose();
     _searchDebounce?.cancel();
+    _newMessageFlagPollTimer?.cancel();
     super.onClose();
   }
 }

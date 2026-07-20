@@ -13,6 +13,7 @@ import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/sockets/sockets_controller.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import '../../../../data/get_storage/get_storage.dart';
 import '../../../../data/models/active_chat_model.dart';
@@ -300,6 +301,8 @@ final TextEditingController headerTextController = TextEditingController();
   final ScrollController scrollController = ScrollController();
 
   late SocketsController _socketsController;
+  void Function(dynamic)? _onChatData;
+  void Function(dynamic)? _onMessageStatus;
 
   @override
   void onInit() {
@@ -340,13 +343,15 @@ final TextEditingController headerTextController = TextEditingController();
       // Step 4: ONLY NOW register socket listeners (after user info is ready)
       _socketsController = Get.find<SocketsController>();
 
-      _socketsController.socket.on('chatdata', (data) {
+      _onChatData = (data) {
         debugPrint('messagecontgroller');
         handleIncomingMessage(data);
-      });
-      _socketsController.socket.on('messagestatus', (data) {
+      };
+      _onMessageStatus = (data) {
         handelIcomingMessageStatus(data);
-      });
+      };
+      _socketsController.socket.on('chatdata', _onChatData!);
+      _socketsController.socket.on('messagestatus', _onMessageStatus!);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         var dc = Get.find<DashboardController>();
@@ -358,8 +363,103 @@ final TextEditingController headerTextController = TextEditingController();
       // forever until the chat is reopened. Periodically reconcile with
       // the server while the chat is open so it self-heals instead.
       _startStatusResync();
+
+      // Safety net: some devices route an incoming-message FCM push through
+      // the background isolate even while this exact chat is open in the
+      // foreground (Android/FCM quirk) — that isolate can't reach into this
+      // controller, so it only flips a SharedPreferences flag. Polling it
+      // directly here (instead of going through DashboardController +
+      // Get.find<MessagesPageController>(), which was found to unreliably
+      // report "not registered" even while this screen was clearly open and
+      // active) guarantees the currently-open chat refreshes itself as long
+      // as this controller instance is alive — no cross-controller lookup
+      // needed.
+      _startNewMessageFlagPoll();
     } catch (e) {
       debugPrint('❌ Error in onInit setup: $e');
+    }
+  }
+
+  Timer? _newMessageFlagPollTimer;
+
+  void _startNewMessageFlagPoll() {
+    _newMessageFlagPollTimer?.cancel();
+    _newMessageFlagPollTimer =
+        Timer.periodic(const Duration(seconds: 2), (_) => _consumeNewMessageFlagForThisChat());
+  }
+
+  void _stopNewMessageFlagPoll() {
+    _newMessageFlagPollTimer?.cancel();
+    _newMessageFlagPollTimer = null;
+  }
+
+  Future<void> _consumeNewMessageFlagForThisChat() async {
+    final prefs = await SharedPreferences.getInstance();
+    // See the matching comment in DashboardController — without reload()
+    // this isolate's cached prefs never observes the background isolate's
+    // write, so the flag would appear permanently false/unset here.
+    await prefs.reload();
+    if (!(prefs.getBool('has_new_messages_to_refresh') ?? false)) return;
+    await prefs.setBool('has_new_messages_to_refresh', false);
+    debugPrint('🔄 [chat-flag-poll] merging new messages for open chat "$profileWaKey"');
+    await _mergeLatestMessages();
+  }
+
+  /// Fetches the latest page of messages and inserts only the ones not
+  /// already present locally (by messageId). Unlike loadChatsApi's
+  /// 'outside' path (which does messageChatList.assignAll — a full replace
+  /// with whatever the server returns), this never wipes out a message that
+  /// was just added optimistically (e.g. one the user is mid-send of, still
+  /// showing "sending", that the server hasn't echoed back in a fetch yet).
+  Future<void> _mergeLatestMessages() async {
+    if (isApiCallInProgress) return;
+    try {
+      final parentUserId = await userData.getParentUserId();
+      final currentUserId = await userData.getLoggedInUserId();
+      final apiKey = await userData.getApiKey();
+      final currentUserRole = await userData.getUserRole();
+      final userPrivilage = await userData.getUserPrivilage();
+
+      Map data = {
+        "parent_user_id": parentUserId,
+        "current_user_id": currentUserId,
+        "api_key": apiKey,
+        "customer_key": profileWaKey,
+        "current_user_role": currentUserRole,
+        "page": "1",
+        "user_privilage": userPrivilage
+      };
+      Map<String, String> headers = {
+        "X-Client-GetGabs": apiKey.toString(),
+        "Content-Type": "application/json"
+      };
+
+      final value = await chatServices.loadChats(data, headers: headers);
+      if (value['status'] != true) return;
+
+      final List<dynamic> freshList = value['message']['data']['data'] ?? [];
+      final existingIds = messageChatList.map((m) => m.messageId).toSet();
+      // freshList is newest-first, same as messageChatList's own ordering
+      // (index 0 = latest) — preserve that relative order when inserting.
+      final newOnes = freshList
+          .map((raw) => Message.fromJson(raw))
+          .where((fresh) => !existingIds.contains(fresh.messageId))
+          .toList();
+
+      if (newOnes.isEmpty) {
+        debugPrint('🔄 [chat-flag-poll] no new messages to merge (already up to date)');
+        return;
+      }
+
+      debugPrint('🔄 [chat-flag-poll] merging ${newOnes.length} new message(s)');
+      messageChatList.insertAll(0, newOnes);
+      groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+
+      if (Get.isRegistered<DashboardController>()) {
+        Get.find<DashboardController>().markChatAsRead(profileWaKey);
+      }
+    } catch (e) {
+      debugPrint('⚠️ [chat-flag-poll] merge error: $e');
     }
   }
 
@@ -2010,6 +2110,13 @@ if (Get.isRegistered<DashboardController>()) {
   @override
   void onClose() {
     _stopStatusResync();
+    _stopNewMessageFlagPoll();
+    if (_onChatData != null) {
+      _socketsController.socket.off('chatdata', _onChatData!);
+    }
+    if (_onMessageStatus != null) {
+      _socketsController.socket.off('messagestatus', _onMessageStatus!);
+    }
     scrollController.removeListener(_scrollListener);
     scrollController.dispose();
     profileWaKey = '';

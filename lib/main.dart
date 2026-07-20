@@ -48,6 +48,9 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
         // _firebaseMessagingBackgroundHandler) — refresh the chat lists now
         // that we're back in the foreground so the customer shows as unread.
         final prefs = await SharedPreferences.getInstance();
+        // Without reload(), this isolate's cached prefs won't see the write
+        // made by the background isolate in _firebaseMessagingBackgroundHandler.
+        await prefs.reload();
         if (prefs.getBool('has_new_messages_to_refresh') ?? false) {
           await prefs.setBool('has_new_messages_to_refresh', false);
           if (Get.isRegistered<DashboardController>()) {

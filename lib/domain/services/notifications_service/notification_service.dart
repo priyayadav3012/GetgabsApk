@@ -354,6 +354,22 @@ class NotificationService {
         final dc = Get.find<DashboardController>();
         dc.refreshActiveChatList(increment: 'replace');
         dc.refreshRollingOverChatList(increment: 'replace');
+
+        // The list refresh above doesn't touch an already-open chat's
+        // message list, so a message arriving while that same chat is on
+        // screen never showed up until the user left and reopened it.
+        // If the incoming message belongs to the chat currently open,
+        // refetch it live too.
+        final incomingWaKey = _extractProfileData(message.data)?['profile_wa_key'];
+        if (incomingWaKey != null &&
+            Get.isRegistered<MessagesPageController>()) {
+          final messagesPageController = Get.find<MessagesPageController>();
+          if (messagesPageController.profileWaKey == incomingWaKey) {
+            messagesPageController.currentPage.value = 1;
+            messagesPageController.loadChatsApi(
+                userKey: incomingWaKey, from: 'outside');
+          }
+        }
       }
 
       if (Platform.isIOS) {

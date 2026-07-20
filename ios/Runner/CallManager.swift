@@ -21,7 +21,7 @@ import WebRTC
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = false
+        config.includesCallsInRecents = true
         // nil = use iOS system default ringtone.
         // "ringtone.caf" was set here but the file was never added to the Xcode
         // bundle, causing CallKit to show an incoming call UI with no audio.

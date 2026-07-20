@@ -931,6 +931,13 @@ class WhatsAppCallingService {
           callStartTime = DateTime.now();
           _logCallStart();
         }
+        // Tell CallKit the outgoing call is now connected, so the Recents
+        // entry reflects an actual answered call (started via startCall() in
+        // makeCall()) rather than one that looks abandoned/unanswered.
+        if (isOutgoingCall && currentCallKitId != null) {
+          FlutterCallkitIncoming.setCallConnected(currentCallKitId!)
+              .catchError((e) => debugPrint('⚠️ CallKit setCallConnected error: $e'));
+        }
         _updateStatus('Connected');
         _isCallActive = true;
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
@@ -1106,6 +1113,25 @@ class WhatsAppCallingService {
     _callAccepted = true;
     _updateStatus('Calling...');
     _startCallTimeout();
+
+    // Register this outgoing call with CallKit so it creates a CXStartCallAction
+    // transaction — without this, iOS has no record of the call and it never
+    // appears in the Phone app's Recents tab (unlike incoming calls, which the
+    // native CallManager already reports via reportNewIncomingCall). Harmless
+    // no-op on Android (see flutter_callkit_incoming's startCall doc comment).
+    final outgoingCallKitId = _uuidFactory.v4();
+    currentCallKitId = outgoingCallKitId;
+    try {
+      await FlutterCallkitIncoming.startCall(CallKitParams(
+        id: outgoingCallKitId,
+        nameCaller: formattedPhone,
+        handle: formattedPhone,
+        appName: 'GetGabs',
+        type: 0,
+      ));
+    } catch (e) {
+      debugPrint('⚠️ CallKit startCall error: $e');
+    }
 
     // Everything past this point can throw (getUserMedia timeout, createOffer,
     // HTTP). Cancel the ringing timer on any failure so it does not leak — the

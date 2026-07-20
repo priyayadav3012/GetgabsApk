@@ -25,25 +25,35 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
   @override
   void onInit() async {
     super.onInit();
+    print('🔌 [socket] SocketsController.onInit() called');
     await _initializeSocket();
+    print('🔌 [socket] _initializeSocket() returned');
     WidgetsBinding.instance.addObserver(this);
   }
 
   Future<void> _initializeSocket() async {
+    print('🔌 [socket] _initializeSocket() starting');
     String platform = Platform.isIOS ? "ios" : "android";
     var role = await userData.getUserRole();
+    print('🔌 [socket] got role=$role');
     var userId = await userData.getLoggedInUserId();
+    print('🔌 [socket] got userId=$userId');
     var userPrivilage = await userData.getUserPrivilage();
+    print('🔌 [socket] got userPrivilage=$userPrivilage');
     var adminId =
         role == "user" ? await userData.getParentUserId() : userId.toString();
+    print('🔌 [socket] got adminId=$adminId');
     var apiKey = await userData.getApiKey();
+    print('🔌 [socket] user info ready — role=$role userId=$userId apiKey.isEmpty=${apiKey.isEmpty}');
 
     if (apiKey.isEmpty) {
-      debugPrint('❌ Socket initialization aborted: API key is undefined or empty');
+      print('❌ [socket] Socket initialization aborted: API key is undefined or empty');
       return;
     }
 
+    print('🔌 [socket] calling initializeSocket() now');
     initializeSocket(platform, role, userId.toString(), userPrivilage, adminId, apiKey);
+    print('🔌 [socket] initializeSocket() call returned (IO.io created, handshake in progress)');
   }
 
   bool isOnMessagesPage(String incomingWaKey) {
@@ -73,7 +83,7 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
             .build());
 
     _socket.on('connect', (data) {
-      print('Connected to socket');
+      print('✅ [socket] Connected to socket');
       print(data);
       var userinfo = {
         'platform': Platform, // new parameter
@@ -83,6 +93,34 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
         'admin_id': adminId
       };
       _socket.emit('connectchannel', userinfo);
+    });
+
+    _socket.onConnectError((data) {
+      print('❌ [socket] connect_error: $data');
+    });
+
+    _socket.onError((data) {
+      print('❌ [socket] error: $data');
+    });
+
+    _socket.onDisconnect((data) {
+      print('⚠️ [socket] disconnected: $data');
+    });
+
+    _socket.onReconnect((data) {
+      print('🔁 [socket] reconnected: $data');
+    });
+
+    _socket.onReconnectAttempt((data) {
+      print('🔁 [socket] reconnect attempt: $data');
+    });
+
+    _socket.onReconnectError((data) {
+      print('❌ [socket] reconnect_error: $data');
+    });
+
+    _socket.onReconnectFailed((data) {
+      print('❌ [socket] reconnect_failed: $data');
     });
 /*
     _socket.on('chatdata', (data) {
@@ -218,15 +256,15 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
 // });
     _socket.on('chatdata', (data) async {
       print('Chat data socket33: $data');
-      var messageData = data['data'];
-      String name = data['customerprofilename'];
-      String mobNumber = data['customerprofile_wa_id'];
 
       if (Get.isDialogOpen ?? false) {
         Get.back();
       }
 
       try {
+        var messageData = data['data'];
+        String name = data['customerprofilename']?.toString() ?? '';
+        String mobNumber = data['customerprofile_wa_id']?.toString() ?? '0';
         var dc = Get.find<DashboardController>();
         // Extract profileWaKey from incoming data
         String incomingWaKey = messageData['profile_wa_key'];
