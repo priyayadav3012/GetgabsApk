@@ -50,8 +50,10 @@ class DashboardController extends GetxController {
 
   /// Returns a valid /partners/ bearer token, using the cached one unless
   /// [forceRefresh] is set (used to retry once after an expired/rejected
-  /// token) or none is cached yet.
-  Future<String?> _getPartnerSessionToken({bool forceRefresh = false}) async {
+  /// token) or none is cached yet. Public — shared by every /partners/
+  /// caller (addCustomer here, and the Assign Chat flow in
+  /// AssignToTeammateDialog) so the token-fetch/caching logic lives in one place.
+  Future<String?> getPartnerSessionToken({bool forceRefresh = false}) async {
     if (!forceRefresh) {
       final cached = await userData.getPartnerSessionToken();
       if (cached != null) return cached;
@@ -96,7 +98,7 @@ class DashboardController extends GetxController {
         "profile_number": profileNumber,
       };
 
-      var token = await _getPartnerSessionToken();
+      var token = await getPartnerSessionToken();
       if (token == null) {
         EasyLoading.showError(
             'Unable to add customer right now. Please try again.',
@@ -119,7 +121,7 @@ class DashboardController extends GetxController {
             msg.contains('auth') ||
             msg.contains('unauthor');
         if (looksLikeAuthFailure) {
-          token = await _getPartnerSessionToken(forceRefresh: true);
+          token = await getPartnerSessionToken(forceRefresh: true);
           if (token != null) {
             value = await chatServices
                 .addCustomerService({...fields, "token": token});

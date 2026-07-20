@@ -1,0 +1,283 @@
+{
+  "info": {
+    "name": "GetGabs - Assign Chat APIs",
+    "description": "Mirrors exactly what the app currently sends for the 'Assign to Teammate' dialog (see lib/domain/services/remote_services/chat_service.dart and lib/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart). Every request in a folder named '... - APP'S CURRENT CALL' uses the same method, URL, and field names the app sends right now — run these first to reproduce a failure outside the app. The app never sends an Authorization header; the bearer token always rides along as a plain field ('token' as a query param for GET, as a multipart form field for POST) — same as every other confirmed-working /partners/ call (addCustomer, getSessionToken, fetchExecutiveList). A '- ALT' request in some folders is an alternate method/shape to try only if the app's current call keeps failing.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://app.getgabs.com" },
+    { "key": "api_key", "value": "", "description": "WhatsApp Business api_key of the test account" },
+    { "key": "session_token", "value": "", "description": "Auto-filled by folder 0's test script" },
+    { "key": "customer_key", "value": "", "description": "profile_wa_key of the chat/customer being assigned" },
+    { "key": "assign_user_id", "value": "", "description": "id from Fetch Executive List's ExecutiveList[].id" },
+    { "key": "assign_username", "value": "", "description": "Currently the CURRENT logged-in user's username (GetStorageUserData.getCurrentUsername()) — app guesses this from username/name/email in the stored login response. Confirm against real backend behaviour." },
+    { "key": "team_id", "value": "", "description": "id from List Teams' teams[].id — create a team first if the list is empty" },
+    { "key": "comment", "value": "Assigned via Postman test" },
+    { "key": "window_type", "value": "opened", "description": "Confirmed values: 'opened' / 'closed', only used for Agent-assign" }
+  ],
+  "item": [
+    {
+      "name": "0. Get Session Token (run first)",
+      "item": [
+        {
+          "name": "Get Session Token - APP'S CURRENT CALL",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "apikey", "value": "{{api_key}}", "type": "text" },
+                { "key": "api_key", "value": "{{api_key}}", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/partners/getSessionToken",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "getSessionToken"]
+            },
+            "description": "Confirmed working. Response contains access_token + expires_in; the test script below saves access_token into {{session_token}} automatically for every other request in this collection."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const json = pm.response.json();",
+                  "  if (json.access_token) {",
+                  "    pm.collectionVariables.set('session_token', json.access_token);",
+                  "    console.log('session_token saved:', json.access_token);",
+                  "  } else {",
+                  "    console.warn('No access_token in response:', json);",
+                  "  }",
+                  "} catch (e) { console.error('Could not parse session token response', e); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Fetch Executive List (Agent / Co-Assign dropdown)",
+      "item": [
+        {
+          "name": "Fetch Executive List - APP'S CURRENT CALL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/settings/fetchExecutiveList?token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "settings", "fetchExecutiveList"],
+              "query": [{ "key": "token", "value": "{{session_token}}" }]
+            },
+            "description": "CONFIRMED WORKING. Response: { status: true, ExecutiveList: [{ id, name, ... }] }. Both Agent mode and Co-Assign mode populate their dropdown from this same list."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. List Teams (Team dropdown)",
+      "item": [
+        {
+          "name": "List Teams - APP'S CURRENT CALL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/settings/teams?token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "settings", "teams"],
+              "query": [{ "key": "token", "value": "{{session_token}}" }]
+            },
+            "description": "CONFIRMED WORKING. Response: { status: true, data: [{ id, name, members_count, ... }] } — note the list is under 'data', not 'teams' as the API doc says."
+          }
+        },
+        {
+          "name": "2b. Create Team (so List Teams has something to return)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "name", "value": "Test Team", "type": "text" },
+                { "key": "description", "value": "Created via Postman for testing", "type": "text" },
+                { "key": "token", "value": "{{session_token}}", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/partners/settings/teams?token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "settings", "teams"],
+              "query": [{ "key": "token", "value": "{{session_token}}" }]
+            },
+            "description": "Not called by the app — this is only here to create test data. Per the API doc this is POST with a JSON body; if this multipart attempt 404s/422s, try 'Create Team - ALT (JSON body)' below."
+          }
+        },
+        {
+          "name": "2c. Create Team - ALT (JSON body, as documented)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Team\",\n  \"description\": \"Created via Postman for testing\",\n  \"token\": \"{{session_token}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/partners/settings/teams?token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "settings", "teams"],
+              "query": [{ "key": "token", "value": "{{session_token}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Assign Chat to Agent (updatelastshortsummery)",
+      "item": [
+        {
+          "name": "Assign to Agent - APP'S CURRENT CALL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/customermanage/updatelastshortsummery?customerKey={{customer_key}}&assigToUserIdd={{assign_user_id}}&usernameIs={{assign_username}}&comment={{comment}}&windowType={{window_type}}&token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "customermanage", "updatelastshortsummery"],
+              "query": [
+                { "key": "customerKey", "value": "{{customer_key}}" },
+                { "key": "assigToUserIdd", "value": "{{assign_user_id}}" },
+                { "key": "usernameIs", "value": "{{assign_username}}" },
+                { "key": "comment", "value": "{{comment}}" },
+                { "key": "windowType", "value": "{{window_type}}" },
+                { "key": "token", "value": "{{session_token}}" }
+              ]
+            },
+            "description": "Confirmed GET is the right method; windowType accepts 'opened'/'closed'. If this still fails, read the raw response body — an 'errors' map pinpoints exactly which field is wrong."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Add Co-Assignee",
+      "item": [
+        {
+          "name": "Add Co-Assignee - APP'S CURRENT CALL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/customermanage/coassign?customerKey={{customer_key}}&coAssignUserIdd={{assign_user_id}}&usernameIs={{assign_username}}&comment={{comment}}&token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "customermanage", "coassign"],
+              "query": [
+                { "key": "customerKey", "value": "{{customer_key}}" },
+                { "key": "coAssignUserIdd", "value": "{{assign_user_id}}" },
+                { "key": "usernameIs", "value": "{{assign_username}}" },
+                { "key": "comment", "value": "{{comment}}" },
+                { "key": "token", "value": "{{session_token}}" }
+              ]
+            },
+            "description": "Confirmed GET is the right method (same as updatelastshortsummery). Run this and read the raw response body — if it has an 'errors' map, that pinpoints exactly which field is wrong."
+          }
+        },
+        {
+          "name": "Add Co-Assignee - ALT (POST multipart)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "customerKey", "value": "{{customer_key}}", "type": "text" },
+                { "key": "coAssignUserIdd", "value": "{{assign_user_id}}", "type": "text" },
+                { "key": "usernameIs", "value": "{{assign_username}}", "type": "text" },
+                { "key": "comment", "value": "{{comment}}", "type": "text" },
+                { "key": "token", "value": "{{session_token}}", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/customermanage/coassign",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "customermanage", "coassign"]
+            },
+            "description": "Only try this if the GET variant above stops working for some reason — GET is the confirmed-correct method."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Assign Chat to Team",
+      "item": [
+        {
+          "name": "Assign to Team - APP'S CURRENT CALL",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "profile_wa_key", "value": "{{customer_key}}", "type": "text" },
+                { "key": "team_id", "value": "{{team_id}}", "type": "text" },
+                { "key": "comment", "value": "{{comment}}", "type": "text" },
+                { "key": "token", "value": "{{session_token}}", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/assign-to-team",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "assign-to-team"]
+            },
+            "description": "Not yet tested in the app (needs a real team_id from List Teams / 2b. Create Team first). If this 404s, try the ALT GET variant below."
+          }
+        },
+        {
+          "name": "Assign to Team - ALT (GET with query params)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/assign-to-team?profile_wa_key={{customer_key}}&team_id={{team_id}}&comment={{comment}}&token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "assign-to-team"],
+              "query": [
+                { "key": "profile_wa_key", "value": "{{customer_key}}" },
+                { "key": "team_id", "value": "{{team_id}}" },
+                { "key": "comment", "value": "{{comment}}" },
+                { "key": "token", "value": "{{session_token}}" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Get Co-Assignees (not called by the app anymore — reference only)",
+      "item": [
+        {
+          "name": "Get Co-Assignees - GET",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/partners/managechat/customermanage/get-coassignees?customerKey={{customer_key}}&token={{session_token}}",
+              "host": ["{{base_url}}"],
+              "path": ["partners", "managechat", "customermanage", "get-coassignees"],
+              "query": [
+                { "key": "customerKey", "value": "{{customer_key}}" },
+                { "key": "token", "value": "{{session_token}}" }
+              ]
+            },
+            "description": "Returns users ALREADY co-assigned to this specific chat (confirmed this is NOT what the Co-Assign dropdown should show — the app now uses Fetch Executive List for that instead, matching the web app's behaviour). Kept here only in case a future 'manage co-assignees' screen needs it."
+          }
+        }
+      ]
+    }
+  ]
+}

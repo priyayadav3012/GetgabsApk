@@ -193,6 +193,48 @@ Future<String> getApiKey() async {
     return storedData['role'];
   }
 
+  /// Returns the current logged-in user's username, for the "usernameIs"
+  /// field the Assign Chat APIs (updatelastshortsummery / coassign) expect.
+  /// Tries the common key candidates since the exact key the login response
+  /// uses hasn't been confirmed against a real payload yet.
+  Future<String> getCurrentUsername() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final storedDataJson = box.read('responseData');
+    if (storedDataJson == null) return '';
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      return storedData['username']?.toString() ??
+          storedData['name']?.toString() ??
+          storedData['email']?.toString() ??
+          '';
+    } catch (e) {
+      debugPrint('❌ getCurrentUsername error: $e');
+      return '';
+    }
+  }
+
+  /// Returns the current logged-in user's display name (e.g. "Michael from
+  /// Getgabs") — for showing WHO performed an action (like the Assign Chat
+  /// note's "assigned by" label), as opposed to getCurrentUsername() which
+  /// is the login username (e.g. "getgabs") sent to the usernameIs API field.
+  Future<String> getCurrentDisplayName() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final storedDataJson = box.read('responseData');
+    if (storedDataJson == null) return '';
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      return storedData['name']?.toString() ??
+          storedData['username']?.toString() ??
+          storedData['email']?.toString() ??
+          '';
+    } catch (e) {
+      debugPrint('❌ getCurrentDisplayName error: $e');
+      return '';
+    }
+  }
+
   /// Returns the identity id that should be used to join the LIVE call
   /// socket — mirrors the topic selection in
   /// NotificationService.getUserTopic()/onInitTopic(), where a privilege-1

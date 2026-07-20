@@ -41,7 +41,11 @@ class RollingOverListTile extends StatelessWidget {
             getPendingMsgCount: rollingOverChatModel.getPendingMsgCount,
             updatedTime: rollingOverChatModel.updatedTime,
             hasVoiceCallingPermission:
-                rollingOverChatModel.hasVoiceCallingPermission);
+                rollingOverChatModel.hasVoiceCallingPermission,
+            assignedUserId: rollingOverChatModel.assignedUserId,
+            assignedUserName: rollingOverChatModel.assignedUserName,
+            assignedTeamId: rollingOverChatModel.assignedTeamId,
+            assignedTeamName: rollingOverChatModel.assignedTeamName);
 
         Get.to(() => MessageRollingPage(
               rollingOverChatModel: rollingConvertedModel,

@@ -284,7 +284,24 @@ String formatMessageText(String messageText) {
           if (parsedData['image'] != null && parsedData['image']!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
-              child: Image.network(parsedData['image']!),
+              child: Image.network(
+                parsedData['image']!,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: 150,
+                  width: double.infinity,
+                  color: Colors.grey.shade200,
+                  child: const Icon(Icons.broken_image_outlined,
+                      color: Colors.grey, size: 32),
+                ),
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Container(
+                    height: 150,
+                    alignment: Alignment.center,
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  );
+                },
+              ),
             ),
           if (parsedData['header'] != null && parsedData['header']!.isNotEmpty)
             Padding(
@@ -384,7 +401,24 @@ String formatMessageText(String messageText) {
           ],
         ));
       } else if (header["type"] == "image" && header.containsKey("image")) {
-        children.add(Image.network(header["image"]["link"]));
+        children.add(Image.network(
+          header["image"]["link"],
+          errorBuilder: (context, error, stackTrace) => Container(
+            height: 150,
+            width: double.infinity,
+            color: Colors.grey.shade200,
+            child: const Icon(Icons.broken_image_outlined,
+                color: Colors.grey, size: 32),
+          ),
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Container(
+              height: 150,
+              alignment: Alignment.center,
+              child: const CircularProgressIndicator(strokeWidth: 2),
+            );
+          },
+        ));
       } else if (header["type"] == "video" && header.containsKey("video")) {
         children.add(SelectableText(
             "🎥 Video Attached: ${header["video"]["filename"] ?? ""}"));

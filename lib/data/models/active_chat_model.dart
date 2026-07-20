@@ -124,6 +124,13 @@ class Profile {
   final String updatedTime;
   final bool hasVoiceCallingPermission;
 
+  // ✅ Assignment state (customer-list API) — drives whether the Assign
+  // dialog should offer a primary "Assign to" or only "Co-assign to".
+  final int? assignedUserId;
+  final String? assignedUserName;
+  final int? assignedTeamId;
+  final String? assignedTeamName;
+
   Profile({
     required this.profileWaId,
     required this.profileWaKey,
@@ -131,6 +138,10 @@ class Profile {
     required this.getPendingMsgCount,
     required this.updatedTime,
     required this.hasVoiceCallingPermission,
+    this.assignedUserId,
+    this.assignedUserName,
+    this.assignedTeamId,
+    this.assignedTeamName,
   });
 
   factory Profile.fromJson(Map<String, dynamic> json) {
@@ -142,6 +153,10 @@ class Profile {
       updatedTime: json['updatedtime'] ?? "",
       hasVoiceCallingPermission:
           (json['hasVoiceCallingPermission'] ?? "no") == "yes",
+      assignedUserId: int.tryParse(json['assigned_user']?.toString() ?? ''),
+      assignedUserName: json['assigned_user_name'],
+      assignedTeamId: int.tryParse(json['assigned_team_id']?.toString() ?? ''),
+      assignedTeamName: json['assigned_team_name'],
     );
   }
 
@@ -154,6 +169,10 @@ class Profile {
       'updatedtime': updatedTime,
       'hasVoiceCallingPermission':
           hasVoiceCallingPermission ? "yes" : "no",
+      'assigned_user': assignedUserId,
+      'assigned_user_name': assignedUserName,
+      'assigned_team_id': assignedTeamId,
+      'assigned_team_name': assignedTeamName,
     };
   }
 
@@ -164,6 +183,10 @@ class Profile {
     int? getPendingMsgCount,
     String? updatedTime,
     bool? hasVoiceCallingPermission,
+    int? assignedUserId,
+    String? assignedUserName,
+    int? assignedTeamId,
+    String? assignedTeamName,
   }) {
     return Profile(
       profileWaId: profileWaId ?? this.profileWaId,
@@ -174,6 +197,10 @@ class Profile {
       updatedTime: updatedTime ?? this.updatedTime,
       hasVoiceCallingPermission:
           hasVoiceCallingPermission ?? this.hasVoiceCallingPermission,
+      assignedUserId: assignedUserId ?? this.assignedUserId,
+      assignedUserName: assignedUserName ?? this.assignedUserName,
+      assignedTeamId: assignedTeamId ?? this.assignedTeamId,
+      assignedTeamName: assignedTeamName ?? this.assignedTeamName,
     );
   }
 }

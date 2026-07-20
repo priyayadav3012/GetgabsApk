@@ -647,6 +647,20 @@ if (Get.isRegistered<DashboardController>()) {
     }
   }
 
+  /// Inserts a locally-known "note" message (returned synchronously by the
+  /// Assign/Co-Assign/Team-Assign APIs) at the top of the chat so the user
+  /// sees the assignment note immediately, without waiting for it to arrive
+  /// over the socket. Skips the insert if a message with the same id is
+  /// already present, in case the backend also pushes the same note over
+  /// the socket (handleIncomingMessage would otherwise insert it a second time).
+  void insertNoteMessage(Message noteMessage) {
+    final alreadyPresent = messageChatList
+        .any((m) => m.messageId == noteMessage.messageId);
+    if (alreadyPresent) return;
+    messageChatList.insert(0, noteMessage);
+    groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+  }
+
   /// Mark a single message as read immediately
   Future<void> markMessageAsReadImmediately(String messageId) async {
     try {
