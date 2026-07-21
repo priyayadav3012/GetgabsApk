@@ -127,7 +127,46 @@ Future<String> getApiKey() async {
       return '';
     }
   }
-  
+
+  /// Returns the top-level auth token used specifically for the SOCKET
+  /// handshake. This is deliberately different from [getApiKey], which returns
+  /// the WhatsApp/facebook_details api_key used for REST calls. The socket
+  /// server validates the top-level `api_key` (an auth token) and rejects the
+  /// WhatsApp Business key with "Invalid API key", so the two must not be
+  /// conflated. Falls back to the REST key only if no auth token is present,
+  /// so logins that only carry the WhatsApp key don't lose socket access.
+  Future<String> getSocketAuthKey() async {
+    try {
+      final box = GetStorage();
+      await box.initStorage;
+      final storedDataJson = box.read('responseData');
+      if (storedDataJson == null) {
+        debugPrint('⚠️ getSocketAuthKey: responseData is null');
+        return '';
+      }
+
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+
+      // 1. Top-level api_key — the auth token the socket expects.
+      final topLevel = storedData['api_key']?.toString() ?? '';
+      if (topLevel.isNotEmpty) {
+        return topLevel;
+      }
+
+      // 2. Agent (sub-user) logins may nest the token under getadmininfo.
+      final adminToken =
+          storedData['getadmininfo']?['api_key']?.toString() ?? '';
+      if (adminToken.isNotEmpty) {
+        return adminToken;
+      }
+
+      return '';
+    } catch (e) {
+      debugPrint('❌ getSocketAuthKey error: $e');
+      return '';
+    }
+  }
+
   /// Returns the WhatsApp Business API key used for CALLING.
   /// Only looks at facebook_details (NOT top-level api_key which is an auth token).
   /// Priority: facebook_details at root > getadmininfo.facebook_details

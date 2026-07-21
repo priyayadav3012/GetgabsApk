@@ -61,6 +61,11 @@ class _ChatEndPoints {
 
 class _MoreScreenEndPoints {
   final String logoutUrl = "logout";
+
+  // Your Profile screen — fetch returns profile fields + country-code and
+  // timezone lists; update saves editable fields (multipart, supports photo).
+  final String profileUrl = "profile";
+  final String profileUpdateUrl = "profile/update";
 }
 
 class _PartnersEndPoints {

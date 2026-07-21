@@ -21,7 +21,10 @@ import WebRTC
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = false
+        // true → CallKit writes answered/missed VoIP calls into the iPhone's
+        // native Recents (Phone app call history). Was false, which suppressed
+        // them entirely.
+        config.includesCallsInRecents = true
         // nil = use iOS system default ringtone.
         // "ringtone.caf" was set here but the file was never added to the Xcode
         // bundle, causing CallKit to show an incoming call UI with no audio.

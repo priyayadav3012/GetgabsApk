@@ -43,9 +43,17 @@ class MessagesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var mediaQuery = MediaQuery.of(context).size;
-    // var messagesPageController = Get.find<MessagesPageController>();
-    final MessagesPageController messagesPageController = Get.put(
-        MessagesPageController(
+    // Reuse the existing controller when this same chat is rebuilt (keyboard
+    // open, orientation, parent rebuild, etc.) instead of creating a brand-new
+    // one — a fresh Get.put on every build re-ran onInit (refetching chats and
+    // re-marking read) and churned the open-chat registration. A different
+    // profileWaKey means we navigated to another conversation, so create fresh.
+    final bool sameChatAlreadyOpen =
+        Get.isRegistered<MessagesPageController>() &&
+            Get.find<MessagesPageController>().profileWaKey == profileWaKey;
+    final MessagesPageController messagesPageController = sameChatAlreadyOpen
+        ? Get.find<MessagesPageController>()
+        : Get.put(MessagesPageController(
             profileWaKey, profile.profileWaId, 'active', profile));
 
     return Scaffold(
