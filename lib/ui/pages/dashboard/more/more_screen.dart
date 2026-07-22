@@ -306,6 +306,7 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                           label:       'Profile',
                           subtitle:    'View your profile',
                           iconBgColor: _C.green, // Dynamic client system visual color key binding map configuration
+                          showProfilePhoto: true, // show uploaded photo here
                           onTap:       () => Get.toNamed(AppRoute.profileDetailsPage),
                         ),
                       ],
@@ -543,6 +544,9 @@ class _MenuItemData {
   final Color        iconBgColor;
   final Color        labelColor;
   final VoidCallback onTap;
+  // When true, the leading icon is replaced by the user's uploaded profile
+  // photo (falls back to [iconPath] when there is no photo / it fails to load).
+  final bool         showProfilePhoto;
 
   const _MenuItemData({
     required this.iconPath,
@@ -551,6 +555,7 @@ class _MenuItemData {
     required this.iconBgColor,
     this.labelColor = const Color(0xFF13111C),
     required this.onTap,
+    this.showProfilePhoto = false,
   });
 }
 
@@ -599,6 +604,36 @@ class _MenuRow extends StatelessWidget {
   final _MenuItemData item;
   const _MenuRow({required this.item});
 
+  // The user's uploaded profile photo for the Profile row, falling back to the
+  // item's SVG icon while it loads / when there is no photo. Reactive so it
+  // updates the instant a new photo is saved on the profile screen.
+  Widget _profilePhotoOrIcon() {
+    final Widget iconFallback = Padding(
+      padding: const EdgeInsets.all(9),
+      child: SvgPicture.asset(
+        item.iconPath,
+        colorFilter: ColorFilter.mode(item.iconBgColor, BlendMode.srcIn),
+      ),
+    );
+
+    if (!Get.isRegistered<ProfileController>()) return iconFallback;
+    final pc = Get.find<ProfileController>();
+
+    return Obx(() {
+      final url = pc.profileImageUrl.value ?? '';
+      if (url.isEmpty) return iconFallback;
+      return Image.network(
+        url,
+        width: 40,
+        height: 40,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : iconFallback,
+        errorBuilder: (context, error, stack) => iconFallback,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -610,22 +645,28 @@ class _MenuRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           child: Row(
             children: [
-              // Vector Svg Graphic Icon Frame box
+              // Vector Svg Graphic Icon Frame box (or the profile photo for the
+              // Profile item).
               Container(
                 width: 40,
                 height: 40,
+                clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: item.iconBgColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(11),
                   border: Border.all(
                       color: item.iconBgColor.withOpacity(0.25)),
                 ),
-                padding: const EdgeInsets.all(9),
-                child: SvgPicture.asset(
-                  item.iconPath,
-                  colorFilter: ColorFilter.mode(
-                      item.iconBgColor, BlendMode.srcIn),
-                ),
+                child: item.showProfilePhoto
+                    ? _profilePhotoOrIcon()
+                    : Padding(
+                        padding: const EdgeInsets.all(9),
+                        child: SvgPicture.asset(
+                          item.iconPath,
+                          colorFilter: ColorFilter.mode(
+                              item.iconBgColor, BlendMode.srcIn),
+                        ),
+                      ),
               ),
 
               const SizedBox(width: 13),
