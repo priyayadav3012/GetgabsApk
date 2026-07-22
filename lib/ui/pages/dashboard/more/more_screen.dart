@@ -454,24 +454,12 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
         ),
         child: Row(
           children: [
-            // User Avatar Initial representation block
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                    colors: [_C.green, _C.greenDark],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(15),
-                boxShadow: [
-                  BoxShadow(
-                      color: _C.green.withOpacity(0.25),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4)),
-                ],
-              ),
-              child: Center(
+            // User avatar: shows the uploaded profile photo when available,
+            // otherwise falls back to the user's initials. Wrapped in Obx so it
+            // updates the moment a new photo is saved on the profile screen.
+            Obx(() {
+              final photoUrl = profileController.profileImageUrl.value ?? '';
+              final initials = Center(
                 child: Text(
                   getInitialsSafe(profileController.userName.value),
                   style: const TextStyle(
@@ -479,8 +467,38 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                       fontSize: 22,
                       fontWeight: FontWeight.w800),
                 ),
-              ),
-            ),
+              );
+              return Container(
+                width: 52,
+                height: 52,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                      colors: [_C.green, _C.greenDark],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                        color: _C.green.withOpacity(0.25),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4)),
+                  ],
+                ),
+                child: photoUrl.isEmpty
+                    ? initials
+                    : Image.network(
+                        photoUrl,
+                        width: 52,
+                        height: 52,
+                        fit: BoxFit.cover,
+                        // Keep initials visible while the photo loads / on error.
+                        loadingBuilder: (context, child, progress) =>
+                            progress == null ? child : initials,
+                        errorBuilder: (context, error, stack) => initials,
+                      ),
+              );
+            }),
       
             const SizedBox(width: 14),
       
