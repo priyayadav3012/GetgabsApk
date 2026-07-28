@@ -294,11 +294,11 @@ class _MediaPreviewScreenState extends State<MediaPreviewScreen> {
               // donwloadFile();
               downloadFileCrossPlatform(
                 widget.mediaUrl,
-                folderName: AppTheme.currentFlavor == 'messagedly'
-                    ? "Messagedly"
-                    : AppTheme.currentFlavor == 'scalewiz'
-                        ? "Scalewiz"
-                        : "GetGabs", // optional folder name
+                folderName: AppTheme.currentFlavor.toLowerCase() == 'messagedly'
+                  ? "Messagedly"
+                  : AppTheme.currentFlavorNormalized == 'scalewiz'
+                    ? "Scalewiz"
+                    : "GetGabs", // optional folder name
               );
             },
           ),

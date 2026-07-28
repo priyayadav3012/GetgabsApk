@@ -8,8 +8,8 @@ import 'package:getgabs/ui/themes/themes.dart';
 class RollingOverChats extends StatelessWidget {
   RollingOverChats({super.key});
   final DashboardController dashboardController = Get.put(DashboardController());
-bool get _isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
-bool get _isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+bool get _isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
+bool get _isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
   @override
   Widget build(BuildContext context) {
     return Obx(() {

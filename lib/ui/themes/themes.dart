@@ -5,6 +5,8 @@ class AppTheme {
 
   // 🕵️‍♂️ Yeh line automatically check karegi ki kaunsa flavor run ho raha hai
   static const String currentFlavor = String.fromEnvironment('FLUTTER_APP_FLAVOR');
+  // Lowercase normalized flavor for case-insensitive checks
+  static final String currentFlavorNormalized = currentFlavor.toLowerCase();
 
   // ============== 🔑 COMMON COLORS (Jo dono apps mein bilkul same hain) ==============
   static const Color blackColor = Color(0xff000000);
@@ -32,32 +34,32 @@ class AppTheme {
   // ============== 🎨 DYNAMIC COLORS (Jo flavor ke hisab se badlenge) ==============
 
   static Color get appThemeColor {
-    if (currentFlavor == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue
-    if (currentFlavor == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
+    if (currentFlavorNormalized == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue
+    if (currentFlavorNormalized == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
     return const Color(0xff034737); // GetGabs Green
   }
 
   static Color get authButtonColor {
-    if (currentFlavor == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue (Aapke code mein typo tha 0xff04242D4, use fix kiya hai)
-    if (currentFlavor == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
+    if (currentFlavorNormalized == 'messagedly') return const Color(0xff4242D4); // Messagedly Blue (Aapke code mein typo tha 0xff04242D4, use fix kiya hai)
+    if (currentFlavorNormalized == 'scalewiz') return const Color(0xff0E7C74); // Scalewiz Teal
     return const Color(0xff034737); // GetGabs Green
   }
 
   static Color get boarderColor {
-    if (currentFlavor == 'messagedly') return const Color.fromARGB(255, 156, 178, 250);
-    if (currentFlavor == 'scalewiz') return const Color(0xff7FE0D4);
+    if (currentFlavorNormalized == 'messagedly') return const Color.fromARGB(255, 156, 178, 250);
+    if (currentFlavorNormalized == 'scalewiz') return const Color(0xff7FE0D4);
     return const Color(0xff77FFAA);
   }
 
   static Color get unreadMessagesColor {
-    if (currentFlavor == 'messagedly') return const Color(0xff4242D4);
-    if (currentFlavor == 'scalewiz') return const Color(0xff17A398);
+    if (currentFlavorNormalized == 'messagedly') return const Color(0xff4242D4);
+    if (currentFlavorNormalized == 'scalewiz') return const Color(0xff17A398);
     return const Color(0xff5ED88C);
   }
 
   static Color get messagesColor {
-    if (currentFlavor == 'messagedly') return const Color.fromARGB(255, 230, 237, 255);
-    if (currentFlavor == 'scalewiz') return const Color(0xffD9F5F1);
+    if (currentFlavorNormalized == 'messagedly') return const Color.fromARGB(255, 230, 237, 255);
+    if (currentFlavorNormalized == 'scalewiz') return const Color(0xffD9F5F1);
     return const Color(0xffDCFCD7);
   }
 

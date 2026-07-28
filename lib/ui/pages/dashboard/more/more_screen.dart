@@ -22,10 +22,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 class _C {
   /// Evaluates whether the current active app compilation targets 'messagedly'
-  static bool get isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
+  static bool get isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
 
   /// Evaluates whether the current active app compilation targets 'scalewiz'
-  static bool get isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+  static bool get isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
 
   // Constant global canvas deep background color setup
   static const bg        = Color(0xFF0A0F0D);

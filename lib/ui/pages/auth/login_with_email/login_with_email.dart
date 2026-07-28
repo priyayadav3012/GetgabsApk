@@ -15,10 +15,10 @@ import 'package:get/get.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 class _C {
   /// Check karta hai ki current flavor 'messagedly' hai ya nahi
-  static bool get isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
+  static bool get isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
 
   /// Check karta hai ki current flavor 'scalewiz' hai ya nahi
-  static bool get isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+  static bool get isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
 
   // Base background dono apps mein same rahega
   static const bg = Color(0xFF0A0F0D);

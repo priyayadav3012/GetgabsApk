@@ -1,13 +1,8 @@
-import 'dart:io';
-
-import 'package:dio/dio.dart';
-import 'package:flutter/material.dart';
-import 'package:get/get.dart';
-import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../base_message_ui.dart';
 import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
+import '../base_message_ui.dart';
 
 class TempleteMessageUi extends StatelessWidget {
   final String? templateData;
@@ -43,21 +38,80 @@ class TempleteMessageUi extends StatelessWidget {
     }
     return text;
   }
-  bool isJson(String str) {
-  try {
-    jsonDecode(str);
-    return true;
-  } catch (e) {
-    return false;
+  String replaceDynamicVariables(String text, Map<String, String> values) {
+    values.forEach((key, value) {
+      text = text.replaceAll('{$key}', value);
+    });
+    return text;
   }
-}
-      String replaceDynamicVariables(String text, Map<String, String> values) {
-  values.forEach((key, value) {
-    text = text.replaceAll('{$key}', value);
-  });
-  return text;
-}
-   
+
+  dynamic decodeJsonPayload(String input) {
+    if (input.isEmpty) return null;
+
+    try {
+      final decoded = jsonDecode(input);
+      if (decoded is String) {
+        return decodeJsonPayload(decoded);
+      }
+      return decoded;
+    } catch (_) {
+      // Handle escaped JSON string values and partial JSON content.
+    }
+
+    final trimmed = input.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        final inner = jsonDecode(trimmed);
+        if (inner is String) {
+          return decodeJsonPayload(inner);
+        }
+      } catch (_) {}
+    }
+
+    final jsonStart = trimmed.indexOf('{');
+    final jsonEnd = trimmed.lastIndexOf('}');
+    if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
+      final candidate = trimmed.substring(jsonStart, jsonEnd + 1);
+      try {
+        final decoded = jsonDecode(candidate);
+        if (decoded is String) {
+          return decodeJsonPayload(decoded);
+        }
+        return decoded;
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  bool isJson(String str) => decodeJsonPayload(str) != null;
+
+  String getInteractivePreview(Map<String, dynamic> interactive) {
+    if (interactive['body'] is Map &&
+        interactive['body']['text'] != null &&
+        interactive['body']['text'].toString().isNotEmpty) {
+      return interactive['body']['text'].toString();
+    }
+
+    if (interactive['header'] is Map &&
+        interactive['header']['text'] != null &&
+        interactive['header']['text'].toString().isNotEmpty) {
+      return interactive['header']['text'].toString();
+    }
+
+    if (interactive['button_reply'] is Map &&
+        interactive['button_reply']['title'] != null) {
+      return interactive['button_reply']['title'].toString();
+    }
+
+    if (interactive['list_reply'] is Map &&
+        interactive['list_reply']['title'] != null) {
+      return interactive['list_reply']['title'].toString();
+    }
+
+    return '';
+  }
+
   Map<String, dynamic> parseTemplateData() {
     String headerText = '';
     String bodyText = '';
@@ -70,121 +124,106 @@ class TempleteMessageUi extends StatelessWidget {
 //  print("33333333333333333333333333");
 
     try {
-      if (templateData != null &&
-          templateData!.isNotEmpty &&
-          messageText.isNotEmpty) {
-        final Map<String, dynamic> templateDataMap = jsonDecode(templateData!);
-        print(templateDataMap);
-        if (templateDataMap.containsKey('data')) {
-          if (templateDataMap['data'].isNotEmpty &&
-              templateDataMap['data'][0].containsKey('components')) {
-            final List<dynamic> components =
-                templateDataMap['data'][0]['components'];
-
+      if (templateData != null && templateData!.isNotEmpty) {
+        final decodedTemplate = decodeJsonPayload(templateData!);
+        if (decodedTemplate is Map<String, dynamic> &&
+            decodedTemplate.containsKey('data')) {
+          final data = decodedTemplate['data'];
+          if (data is List && data.isNotEmpty &&
+              data[0] is Map<String, dynamic> &&
+              data[0].containsKey('components')) {
+            final List<dynamic> components = data[0]['components'];
             for (var component in components) {
-              if (component['type'] == 'HEADER') {
-                if (component.containsKey('text')) {
-                  headerText = component['text'];
-                }
-                if (component.containsKey('format') &&
-                    component['format'] == 'IMAGE') {
-                  imageUrl = component['example']['header_handle'][0];
-                } else if (component.containsKey('format') &&
-                    component['format'] == 'VIDEO') {
-                  videoUrl = component['example']['header_handle'][0];
-                }
-              } else if (component['type'] == 'BODY' &&
-                  component.containsKey('text')) {
-                bodyText = component['text'];
-              } else if (component['type'] == 'FOOTER' &&
-                  component.containsKey('text')) {
-                footerText = component['text'];
-              } else if (component['type'] == 'BUTTONS' &&
-                  component.containsKey('buttons')) {
-                for (var buttons in component['buttons']) {
-                  final buttonText = buttons['text'] ?? "";
-                  final buttonType = buttons['type'] ?? "";
-                  final buttonUrl = buttonType == 'URL' ? buttons['url'] : "";
-
-                  buttonsList.add({
-                    'text': buttonText,
-                    'type': buttonType,
-                    'url': buttonUrl
-                  });
+              if (component is Map<String, dynamic>) {
+                final type = (component['type'] as String?)?.toUpperCase() ?? '';
+                if (type == 'HEADER') {
+                  if (component.containsKey('text')) {
+                    headerText = component['text']?.toString() ?? '';
+                  }
+                  if (component['format'] == 'IMAGE') {
+                    imageUrl = component['example']?['header_handle']?[0] ?? '';
+                  } else if (component['format'] == 'VIDEO') {
+                    videoUrl = component['example']?['header_handle']?[0] ?? '';
+                  }
+                } else if (type == 'BODY') {
+                  bodyText = component['text']?.toString() ?? '';
+                } else if (type == 'FOOTER') {
+                  footerText = component['text']?.toString() ?? '';
+                } else if (type == 'BUTTONS' && component.containsKey('buttons')) {
+                  final buttons = component['buttons'];
+                  if (buttons is List) {
+                    for (var button in buttons) {
+                      if (button is Map<String, dynamic>) {
+                        final buttonText = button['text']?.toString() ?? '';
+                        final buttonType = button['type']?.toString() ?? '';
+                        final buttonUrl = buttonType == 'URL'
+                            ? button['url']?.toString() ?? ''
+                            : '';
+                        buttonsList.add({
+                          'text': buttonText,
+                          'type': buttonType,
+                          'url': buttonUrl,
+                        });
+                      }
+                    }
+                  }
                 }
               }
             }
           }
-        } else if (templateData == null) {
-          print('Error: templateData does not contain expected structure.');
         }
       }
-   
-      
-      if (messageText.isNotEmpty && isJson(messageText)) {
-       Map<String, dynamic> messageTextData = {};
 
-if (isJson(messageText)) {
-  messageTextData = jsonDecode(messageText);
-} else {
-  print("messageText is plain text: $messageText");
-}
-
-        if (messageTextData.containsKey('template') &&
-            messageTextData['template'].containsKey('components')) {
-          final List<dynamic> templateComponents =
-              messageTextData['template']['components'];
-
-          for (var component in templateComponents) {
-            if (component.containsKey('parameters')) {
-              final List<dynamic> parameters = component['parameters'] ?? [];
-
-              if (component['type'] != null) {
-                final type =
-                    (component['type'] as String?)?.toUpperCase() ?? '';
-
+      if (messageText.isNotEmpty) {
+        final dynamic rawMessageData = decodeJsonPayload(messageText);
+        if (rawMessageData is Map<String, dynamic>) {
+          if (rawMessageData.containsKey('template') &&
+              rawMessageData['template'] is Map<String, dynamic> &&
+              rawMessageData['template']['components'] is List) {
+            final List<dynamic> templateComponents =
+                rawMessageData['template']['components'];
+            for (var component in templateComponents) {
+              if (component is Map<String, dynamic> &&
+                  component.containsKey('parameters')) {
+                final parameters = component['parameters'] as List<dynamic>;
+                final type = (component['type'] as String?)?.toUpperCase() ?? '';
                 if (type == 'HEADER') {
                   headerText = replaceTemplateVariables(headerText, parameters);
                   if (parameters.isNotEmpty) {
                     final parameterType = parameters[0]['type'];
                     if (parameterType == 'IMAGE') {
-                      imageUrl = parameters[0]['image']['link'] ?? '';
+                      imageUrl = parameters[0]['image']?['link']?.toString() ?? '';
                     } else if (parameterType == 'VIDEO') {
-                      videoUrl = parameters[0]['video']['link'] ?? '';
+                      videoUrl = parameters[0]['video']?['link']?.toString() ?? '';
                     }
                   }
                 } else if (type == 'BODY') {
                   bodyText = replaceTemplateVariables(bodyText, parameters);
                 } else if (type == 'FOOTER') {
                   footerText = replaceTemplateVariables(footerText, parameters);
-                } // else if(type =='BUTTONS'){
-                //   buttonsList = replaceTemplateVariables(buttonsList, parameters) as List<Map<String, String>>;
-                // }
-                else if (type == 'BUTTONS') {
-                  // buttonsList = replaceTemplateVariables(buttonsList, parameters);
-                  //     for(var buttons in component['buttons']){
-                  //   final buttonText = buttons['text']?? "";
-                  //   final buttonType = buttons['type']??"";
-                  //   final buttonUrl = buttonType == 'URL' ? buttons['url']:"";
-
-                  // }
                 }
               }
             }
           }
-        } else if (messageTextData.containsKey('interactive')) {
-          // print("777777777777777777777777777777777777777");
-          final Map<String, dynamic> interactiveData = jsonDecode(messageText);
-          final Map<String, dynamic>? interactive =
-              interactiveData['interactive'];
 
-          if (interactiveData.isNotEmpty) {
-            interactiveMessage = interactive!;
+          if (rawMessageData.containsKey('interactive')) {
+            final dynamic interactiveRaw = rawMessageData['interactive'];
+            if (interactiveRaw is Map<String, dynamic>) {
+              interactiveMessage = interactiveRaw;
+            } else if (interactiveRaw is String) {
+              final decodedInteractive = decodeJsonPayload(interactiveRaw);
+              if (decodedInteractive is Map<String, dynamic>) {
+                interactiveMessage = decodedInteractive;
+              }
+            }
           }
-        } else {
-          print(
-              'Error: messageText does not contain expected template structure.');
-          print(messageText);
+          if (rawMessageData['type'] == 'interactive' &&
+              rawMessageData.containsKey('interactive')) {
+            final dynamic interactiveRaw = rawMessageData['interactive'];
+            if (interactiveRaw is Map<String, dynamic>) {
+              interactiveMessage = interactiveRaw;
+            }
+          }
         }
       }
     } catch (e) {
@@ -204,25 +243,43 @@ if (isJson(messageText)) {
 String formatMessageText(String messageText) {
   if (messageText.isEmpty) return '';
 
-  if (!isJson(messageText)) {
-    return replaceDynamicVariables(messageText, 
-    {"name": senderName??'sadcsdv'}
+  final decoded = decodeJsonPayload(messageText);
+  if (decoded == null) {
+    return replaceDynamicVariables(
+      messageText,
+      {"name": senderName ?? ''},
     );
   }
 
-  try {
-    final Map<String, dynamic> parsedJson = jsonDecode(messageText);
-    // interactive ya template ho toh empty return karo
-    // buildInteractiveContent handle karega
-    if (parsedJson.containsKey('interactive') ||
-        parsedJson.containsKey('template') ||
-        parsedJson.containsKey('type')) {
+  if (decoded is String) {
+    return replaceDynamicVariables(
+      decoded,
+      {"name": senderName ?? ''},
+    );
+  }
+
+  if (decoded is Map<String, dynamic>) {
+    if (decoded.containsKey('text') && decoded['text'] is Map) {
+      return decoded['text']['body']?.toString() ?? '';
+    }
+
+    if (decoded.containsKey('interactive')) {
+      final dynamic interactive = decoded['interactive'];
+      if (interactive is Map<String, dynamic>) {
+        return getInteractivePreview(interactive);
+      }
       return '';
     }
-    return '';
-  } catch (e) {
-    return '';
+
+    if (decoded.containsKey('template')) {
+      final dynamic template = decoded['template'];
+      if (template is Map && template.containsKey('components')) {
+        return '';
+      }
+    }
   }
+
+  return '';
 }
 //   String formatMessageText(String messageText) {
 //     if (messageText.isEmpty) {
@@ -259,6 +316,7 @@ String formatMessageText(String messageText) {
   Widget build(BuildContext context) {
     // if (messageType == "template") {
     final parsedData = parseTemplateData();
+    final formattedText = formatMessageText(messageText);
     return BaseMessageUi(
       isSentByMe: isSentByMe,
       createdAt: createdAt,
@@ -322,11 +380,11 @@ String formatMessageText(String messageText) {
                 style: const TextStyle(color: Colors.black87),
               ),
             ),
-          if (messageText.isNotEmpty || templateData == null)
+          if (formattedText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
               child: SelectableText(
-                formatMessageText(messageText),
+                formattedText,
                 style: const TextStyle(color: Colors.black87),
               ),
             ),
@@ -463,39 +521,42 @@ String formatMessageText(String messageText) {
           style: TextStyle(fontSize: 14, color: Colors.grey)));
     }
 
-    // Handle "button" type interactive messages
+    // Handle "button" type interactive messages (render like template buttons)
     if (interactive.containsKey("action") &&
         interactive["action"].containsKey("buttons")) {
-      List<dynamic> buttons = interactive["action"]["buttons"];
-      children.addAll(buttons.map((button) {
-        return Column(
-          children: [
-            const Divider(
-              height: 10,
-              thickness: 1,
-              color: Colors.grey,
-            ),
-            TextButton(
-              onPressed: () {},
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.link),
-                  const SizedBox(width: 12),
-                  SelectableText(button['reply']['title'].toString()),
-                ],
-              ),
-            ),
-          ],
-        );
+      final List<dynamic> buttons = interactive["action"]["buttons"];
+      children.add(const Divider(
+        height: 20,
+        thickness: 1,
+        color: Colors.grey,
+      ));
+      for (var button in buttons) {
+        final title = (button is Map && button.containsKey('text'))
+            ? (button['text']?.toString() ?? '')
+            : (button is Map &&
+                    button.containsKey('reply') &&
+                    button['reply'] is Map &&
+                    button['reply'].containsKey('title'))
+                ? (button['reply']['title']?.toString() ?? '')
+                : '';
 
-        // return ElevatedButton(
-        //   onPressed: () {
-        //     print("Button clicked: ${button['reply']['id']}");
-        //   },
-        //   child: SelectableText(button["reply"]["title"]),
-        // );
-      }).toList());
+        children.add(TextButton(
+          onPressed: () {},
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.link),
+              const SizedBox(width: 12),
+              SelectableText(title),
+            ],
+          ),
+        ));
+      }
+      children.add(const Divider(
+        height: 20,
+        thickness: 1,
+        color: Colors.grey,
+      ));
     }
 
     // Handle List Reply
@@ -516,7 +577,6 @@ String formatMessageText(String messageText) {
 
     // Handle Flow Messages
     if (interactive.containsKey("flow")) {
-      final flowData = interactive['action'] ?? {};
       children.add(Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -532,10 +592,9 @@ String formatMessageText(String messageText) {
       ));
     }
     if (interactive.containsKey("action") &&
-        interactive["action"]["name"] == "cta_url") {
-      String url = interactive["action"]["parameters"]["url"] ?? "#";
+      interactive["action"]["name"] == "cta_url") {
       String displayText =
-          interactive["action"]["parameters"]["display_text"] ?? "Open Link";
+        interactive["action"]["parameters"]["display_text"] ?? "Open Link";
 
       children.add(
         GestureDetector(
@@ -562,10 +621,9 @@ String formatMessageText(String messageText) {
     }
     // Handle NFM Replies
     if (interactive.containsKey("nfm_reply")) {
-      final nfmResponse =
-          jsonDecode(interactive['nfm_reply']['response_json'] ?? "{}");
+      // response_json available, but we don't need to use it here
       children.add(SelectableText('Form Sent',
-          style: TextStyle(fontWeight: FontWeight.bold)));
+        style: TextStyle(fontWeight: FontWeight.bold)));
     }
 
     // Handle Button Reply Messages

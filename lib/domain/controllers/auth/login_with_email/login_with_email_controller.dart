@@ -20,6 +20,8 @@ class LoginWithEmailController extends GetxController
   // ✅ Flavor — Android + iOS dono ke liye
   static const String currentFlavor =
       String.fromEnvironment('FLUTTER_APP_FLAVOR');
+  // Normalized flavor (lowercase) to make comparisons case-insensitive
+  static String get currentFlavorNormalized => currentFlavor.toLowerCase();
 
   var isShowPassword = false.obs;
   final emailController = TextEditingController().obs;
@@ -231,10 +233,10 @@ class LoginWithEmailController extends GetxController
     };
 
     // ✅ Flavor check — dono platforms pe kaam karega
-    if (currentFlavor == 'messagedly') {
+    if (currentFlavorNormalized == 'messagedly') {
       data['white_label'] = 'true';
       print('🎯 Flavor: Messagedly — white_label=true');
-    } else if (currentFlavor == 'scalewiz') {
+    } else if (currentFlavorNormalized == 'scalewiz') {
       data['white_label'] = 'true';
       print('🎯 Flavor: Scalewiz — white_label=true');
     } else {

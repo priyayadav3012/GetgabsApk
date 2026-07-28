@@ -31,9 +31,9 @@ class ApiEndPoints {
 
   // ✅ Scalewiz ka login endpoint v3 pe hai, baaki sab endpoints v2 pe hi rahenge
   static String get loginBaseUrl =>
-      LoginWithEmailController.currentFlavor == 'scalewiz'
-          ? _scalewizLoginBaseUrl
-          : baseUrl;
+      LoginWithEmailController.currentFlavorNormalized == 'scalewiz'
+        ? _scalewizLoginBaseUrl
+        : baseUrl;
 }
 
 class _AuthEndPoints {
@@ -187,11 +187,11 @@ class WhatsAppCallingConfig {
   // LoginWithEmailController.currentFlavor use karo
   // ============================================
   static bool _checkIsMessagedly() {
-    return LoginWithEmailController.currentFlavor == 'messagedly';
+    return LoginWithEmailController.currentFlavorNormalized == 'messagedly';
   }
 
   static bool _checkIsScalewiz() {
-    return LoginWithEmailController.currentFlavor == 'scalewiz';
+    return LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
   }
 
   // ============================================

@@ -3,24 +3,26 @@ import 'package:flutter/material.dart';
 class ImageAssets {
   // 🕵️‍♂️ Flavor detect karne ke liye line
   static const String currentFlavor = String.fromEnvironment('FLUTTER_APP_FLAVOR');
+  // Lowercase normalized flavor for case-insensitive checks
+  static final String currentFlavorNormalized = currentFlavor.toLowerCase();
 
   //-------------------------- Dynamic Logos (Jo Flavor ke hisab se badlenge) ---------------------------------
   
   static String get getGabsLogoSvg {
-    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka SVG Logo path
-    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
+    if (currentFlavorNormalized == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka SVG Logo path
+    if (currentFlavorNormalized == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
     return 'assets/images/getgabslogo.svg';                                       // 🟦 GetGabs ka SVG Logo path
   }
 
   static String get getGabsLogoPng {
-    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka PNG Logo path
-    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
+    if (currentFlavorNormalized == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka PNG Logo path
+    if (currentFlavorNormalized == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka Logo path
     return 'assets/images/get_gabs_logo.png';                                     // 🟦 GetGabs ka PNG Logo path
   }
 
   static String get getgabsLogoPng {
-    if (currentFlavor == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka dusra PNG Logo path (Splash ke liye jo use ho raha tha)
-    if (currentFlavor == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka dusra Logo path
+    if (currentFlavorNormalized == 'messagedly') return 'assets/images/messagedly_logo.png'; // 🟧 Messagedly ka dusra PNG Logo path (Splash ke liye jo use ho raha tha)
+    if (currentFlavorNormalized == 'scalewiz') return 'assets/images/scalewiz_logo.png';     // 🟩 Scalewiz ka dusra Logo path
     return 'assets/images/gglogo.png';                                           // 🟦 GetGabs ka dusra PNG Logo path
   }
 

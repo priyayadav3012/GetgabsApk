@@ -631,15 +631,8 @@ if (message.messageType == 'text') {
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
-    } else if (message.messageType == 'interactive') {
-      return InteractiveMessageUi(
-        messageText: message.messageText,
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-      );
-    } else if (message.messageType == 'buttons') {
+    } else if (message.messageType == 'interactive' ||
+        message.messageType == 'buttons') {
       return TempleteMessageUi(
         templateData: message.templateData,
         messageText: message.messageText,

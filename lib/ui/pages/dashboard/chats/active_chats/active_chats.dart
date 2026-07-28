@@ -10,8 +10,8 @@ class ActiveChats extends StatelessWidget {
 
   final DashboardController dashboardController =
       Get.find<DashboardController>();
-bool get _isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
-bool get _isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+bool get _isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
+bool get _isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
   @override
   Widget build(BuildContext context) {
     return Obx(() {
