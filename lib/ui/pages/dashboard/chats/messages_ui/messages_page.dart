@@ -399,7 +399,7 @@ if (message.messageType == 'text') {
     if (body != null && body.isNotEmpty) displayText = body;
   } catch (_) {}
   return TextMessageUi(
-    text: message.messageText, // ← messageText ki jagah displayText
+    text: displayText,
     isSentByMe: message.sender == 1 ? false : true,
     createdAt: message.createdAt,
     mediaQuery: mediaQuery,
@@ -716,17 +716,79 @@ if (message.messageType == 'text') {
       // totally blank bubble. Fall back to showing the raw text/body
       // instead of dropping the content silently.
       String displayText = message.messageText;
+      String? interactiveReplyTitle;
+      String? contextId;
       try {
         final decoded = jsonDecode(message.messageText);
         if (decoded is Map) {
+          final interactive = decoded['interactive'];
+          final replyTitle = interactive is Map
+              ? (interactive['list_reply']?['title']?.toString() ??
+                  interactive['button_reply']?['title']?.toString() ??
+                  interactive['nfm_reply']?['name']?.toString())
+              : null;
           final body = decoded['text']?['body']?.toString() ??
               decoded['body']?.toString() ??
-              decoded['caption']?.toString();
+              decoded['caption']?.toString() ??
+              replyTitle;
           if (body != null && body.isNotEmpty) displayText = body;
+          if (replyTitle != null && replyTitle.isNotEmpty) {
+            interactiveReplyTitle = replyTitle;
+            contextId = decoded['context']?['id']?.toString();
+          }
         }
       } catch (_) {}
       if (displayText.trim().isEmpty) {
         displayText = '[${message.messageType}]';
+      }
+
+      // A WhatsApp list/button reply — render it like a quoted WhatsApp
+      // reply (a small preview of the message it replied to, followed by
+      // the option the customer picked) instead of plain/raw text.
+      if (interactiveReplyTitle != null) {
+        String? quotedPreview;
+        if (contextId != null && contextId.isNotEmpty) {
+          final chatList = Get.find<MessagesPageController>().messageChatList;
+          final originalIndex =
+              chatList.indexWhere((m) => m.messageId == contextId);
+          if (originalIndex != -1) {
+            quotedPreview = _previewTextFor(chatList[originalIndex]);
+          }
+        }
+        return BaseMessageUi(
+          isSentByMe: message.sender == 1 ? false : true,
+          createdAt: message.createdAt,
+          mediaQuery: mediaQuery,
+          deliveryStatus: message.deliveryStatus ?? "sent",
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (quotedPreview != null && quotedPreview.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                    border: const Border(
+                      left: BorderSide(color: Colors.green, width: 4.0),
+                    ),
+                  ),
+                  child: Text(
+                    quotedPreview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                ),
+              SelectableText(
+                interactiveReplyTitle,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        );
       }
 
       return BaseMessageUi(
@@ -743,6 +805,22 @@ if (message.messageType == 'text') {
         ),
       );
     }
+  }
+
+  // Best-effort short preview of an arbitrary earlier message, used to show
+  // "replied to" context above a WhatsApp list/button reply.
+  String _previewTextFor(Message m) {
+    String text = m.messageText;
+    try {
+      final decoded = jsonDecode(m.messageText);
+      if (decoded is Map) {
+        final body = decoded['text']?['body']?.toString() ??
+            decoded['body']?.toString() ??
+            decoded['caption']?.toString();
+        if (body != null && body.isNotEmpty) text = body;
+      }
+    } catch (_) {}
+    return text;
   }
 
   bool isJson(String str) {

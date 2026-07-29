@@ -875,7 +875,7 @@
 				FLUTTER_BUILD_NAME = 1.0.114;
 				FLUTTER_BUILD_NUMBER = 114;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
+				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -976,7 +976,7 @@
 				FLUTTER_BUILD_NAME = 1.0.114;
 				FLUTTER_BUILD_NUMBER = 114;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
+				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1072,7 +1072,7 @@
 				FLUTTER_BUILD_NAME = 1.0.114;
 				FLUTTER_BUILD_NUMBER = 114;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
+				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

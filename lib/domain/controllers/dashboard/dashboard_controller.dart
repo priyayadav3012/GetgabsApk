@@ -6,7 +6,6 @@ import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/rolling_over_chat_model.dart';
-import 'package:getgabs/domain/controllers/sockets/sockets_controller.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
@@ -183,7 +182,6 @@ class DashboardController extends GetxController {
 
     dashScrollController.addListener(_scrollListener);
     rollingOverScrollController.addListener(_rollingOverScrollListner);
-    Get.put(SocketsController());
 
     focusNode.addListener(() {
       isSearching.value = focusNode.hasFocus;

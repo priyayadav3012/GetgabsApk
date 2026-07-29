@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
 import '../base_message_ui.dart';
 
@@ -85,6 +86,32 @@ class TempleteMessageUi extends StatelessWidget {
   }
 
   bool isJson(String str) => decodeJsonPayload(str) != null;
+
+  static final RegExp _inlineButtonMarker =
+      RegExp(r'\((List )?Button:\s*([^)]+)\)');
+  static final RegExp _labelUrlSplit =
+      RegExp(r'^(.*?)\s*-\s*(https?://\S+)$');
+
+  // Some outgoing bot messages carry plain-text placeholder markers like
+  // "(Button: Visit Website - https://example.com)" or
+  // "(List Button: Select Option)" instead of real WhatsApp interactive
+  // JSON. Strip those markers out of the displayed text and turn them
+  // into actual button rows below the message.
+  Map<String, dynamic> extractInlineButtons(String text) {
+    final buttons = <Map<String, String>>[];
+    for (final match in _inlineButtonMarker.allMatches(text)) {
+      final isList = match.group(1) != null;
+      final content = match.group(2)!.trim();
+      final split = _labelUrlSplit.firstMatch(content);
+      buttons.add({
+        'label': split != null ? split.group(1)!.trim() : content,
+        'url': split != null ? split.group(2)!.trim() : '',
+        'isList': isList.toString(),
+      });
+    }
+    final cleanedText = text.replaceAll(_inlineButtonMarker, '').trim();
+    return {'text': cleanedText, 'buttons': buttons};
+  }
 
   String getInteractivePreview(Map<String, dynamic> interactive) {
     if (interactive['body'] is Map &&
@@ -316,7 +343,9 @@ String formatMessageText(String messageText) {
   Widget build(BuildContext context) {
     // if (messageType == "template") {
     final parsedData = parseTemplateData();
-    final formattedText = formatMessageText(messageText);
+    final inline = extractInlineButtons(formatMessageText(messageText));
+    final formattedText = inline['text'] as String;
+    final inlineButtons = inline['buttons'] as List<Map<String, String>>;
     return BaseMessageUi(
       isSentByMe: isSentByMe,
       createdAt: createdAt,
@@ -423,7 +452,30 @@ String formatMessageText(String messageText) {
             ),
           if (parsedData['interactiveMessage'] != null &&
               parsedData['interactiveMessage']!.isNotEmpty)
-            buildInteractiveContent(parsedData['interactiveMessage'])
+            buildInteractiveContent(parsedData['interactiveMessage']),
+          if (inlineButtons.isNotEmpty)
+            Column(
+              children: [
+                const Divider(height: 20, thickness: 1, color: Colors.grey),
+                for (var btn in inlineButtons)
+                  TextButton(
+                    onPressed: btn['url']!.isNotEmpty
+                        ? () => launchUrl(Uri.parse(btn['url']!),
+                            mode: LaunchMode.externalApplication)
+                        : null,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(btn['isList'] == 'true'
+                            ? Icons.list
+                            : Icons.link),
+                        const SizedBox(width: 12),
+                        SelectableText(btn['label']!),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
         ],
       ),
     );
