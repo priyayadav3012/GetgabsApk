@@ -16,7 +16,9 @@ import WebRTC
     private var answeredCallUUIDs: Set<UUID> = []
 
     override init() {
-        let config = CXProviderConfiguration(localizedName: "GetGabs")
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        let isMessagedly = bundleIdentifier.lowercased().contains("messagedly")
+        let config = CXProviderConfiguration(localizedName: isMessagedly ? "Messagedly" : "GetGabs")
         config.supportsVideo = false
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
