@@ -172,7 +172,6 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
-				A868675F3018895B002A7F16 /* Firebase */,
 				6BEB521D2FA613B700322631 /* CallManager.swift */,
 				6B3F316F2DCCE40D00B227DB /* Runner.entitlements */,
 				A868675D3018895B002A7F16 /* GoogleService-Info-Messagedly.plist */,
@@ -196,29 +195,6 @@
 			children = (
 			);
 			path = Runner;
-			sourceTree = "<group>";
-		};
-		A868675C3018895B002A7F16 /* Getgabs */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Getgabs;
-			sourceTree = "<group>";
-		};
-		A868675E3018895B002A7F16 /* Messagedly */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Messagedly;
-			sourceTree = "<group>";
-		};
-		A868675F3018895B002A7F16 /* Firebase */ = {
-			isa = PBXGroup;
-			children = (
-				A868675C3018895B002A7F16 /* Getgabs */,
-				A868675E3018895B002A7F16 /* Messagedly */,
-			);
-			path = Firebase;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -569,8 +545,8 @@
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -754,13 +730,14 @@
 			baseConfigurationReference = 9740EEB21CF90195004384FC /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_LAUNCH_IMAGE_NAME = LaunchImage;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerDebug.entitlements;
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -787,8 +764,8 @@
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Getgabs;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -867,13 +844,14 @@
 			baseConfigurationReference = 9740EEB21CF90195004384FC /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-Messagedly";
+				ASSETCATALOG_COMPILER_LAUNCH_IMAGE_NAME = "LaunchImage-Messagedly";
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/RunnerDebug.entitlements;
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -973,8 +951,8 @@
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -1069,8 +1047,8 @@
 				CURRENT_PROJECT_VERSION = 58;
 				DEVELOPMENT_TEAM = F3Z2R4LSLD;
 				ENABLE_BITCODE = NO;
-				FLUTTER_BUILD_NAME = 1.0.114;
-				FLUTTER_BUILD_NUMBER = 114;
+				FLUTTER_BUILD_NAME = 1.0.116;
+				FLUTTER_BUILD_NUMBER = 116;
 				INFOPLIST_FILE = Runner/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Messagedly;
 				LD_RUNPATH_SEARCH_PATHS = (

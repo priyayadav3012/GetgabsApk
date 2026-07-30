@@ -32,7 +32,8 @@ import WebRTC
         // Copy Bundle Resources phase and restore: config.ringtoneSound = "ringtone.caf"
         config.ringtoneSound = nil
 
-        if let image = UIImage(named: "IconMask") {
+        let iconAssetName = Self.assetName(forBaseName: "IconMask")
+        if let image = UIImage(named: iconAssetName) {
             config.iconTemplateImageData = image.pngData()
         }
 
@@ -49,6 +50,12 @@ import WebRTC
         rtcAudioSession.useManualAudio = true
         rtcAudioSession.isAudioEnabled = false
         configureWebRTCAudio()
+    }
+
+    private static func assetName(forBaseName baseName: String) -> String {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        let isMessagedly = bundleIdentifier.lowercased().contains("messagedly")
+        return isMessagedly ? "\(baseName)-Messagedly" : baseName
     }
 
     // MARK: - INCOMING CALL
