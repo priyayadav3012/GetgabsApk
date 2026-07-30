@@ -22,6 +22,7 @@ import '../../../../../data/models/message_modal.dart';
 import '../../../chat_uis/audio_message_ui/audio_message_ui.dart';
 import '../../../chat_uis/base_message_ui.dart';
 import '../../../chat_uis/button_message_ui.dart';
+import '../../../chat_uis/call_message_ui/call_message_ui.dart';
 import '../../../chat_uis/document_message/document_message_ui.dart';
 import '../../../chat_uis/image_message_ui/image_message_ui.dart';
 import '../../../chat_uis/location_message_ui/location_message_ui.dart';
@@ -630,6 +631,22 @@ if (message.messageType == 'text') {
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
+      );
+    } else if (message.messageType == 'interactive' &&
+        message.hasCallHistory) {
+      // A voice-call-related "interactive" message (e.g. a call-permission
+      // reply) that also carries callHistory data — show the call log UI
+      // instead of the generic interactive-reply UI. Covers both call
+      // directions (customer calling us, or us calling the customer).
+      return CallMessageUi(
+        isSentByMe: message.sender == 1 ? false : true,
+        createdAt: message.createdAt,
+        mediaQuery: mediaQuery,
+        deliveryStatus: message.deliveryStatus ?? "sent",
+        callDurationSeconds: message.callDurationSeconds,
+        callStatus: message.callStatus,
+        direction: message.direction,
+        callConnectedAt: message.callConnectedAt,
       );
     } else if (message.messageType == 'interactive' ||
         message.messageType == 'buttons') {

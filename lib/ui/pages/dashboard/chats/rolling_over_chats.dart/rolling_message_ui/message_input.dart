@@ -18,6 +18,7 @@ import '../../../../../../data/models/message_modal.dart';
 import '../../../../chat_uis/audio_message_ui/audio_message_ui.dart';
 import '../../../../chat_uis/base_message_ui.dart';
 import '../../../../chat_uis/button_message_ui.dart';
+import '../../../../chat_uis/call_message_ui/call_message_ui.dart';
 import '../../../../chat_uis/document_message/document_message_ui.dart';
 import '../../../../chat_uis/location_message_ui/location_message_ui.dart';
 import '../../../../chat_uis/note_message_ui/note_message_ui.dart';
@@ -327,6 +328,19 @@ class MessageRollingPage extends StatelessWidget {
     //   );
     // }
 
+    else if (message.messageType == 'interactive' &&
+        message.hasCallHistory) {
+      return CallMessageUi(
+        isSentByMe: message.sender == 1 ? false : true,
+        createdAt: message.createdAt,
+        mediaQuery: mediaQuery,
+        deliveryStatus: message.deliveryStatus ?? "sent",
+        callDurationSeconds: message.callDurationSeconds,
+        callStatus: message.callStatus,
+        direction: message.direction,
+        callConnectedAt: message.callConnectedAt,
+      );
+    }
     else if (message.messageType == 'buttons' ||
         message.messageType == 'interactive') {
       return TempleteMessageUi(
