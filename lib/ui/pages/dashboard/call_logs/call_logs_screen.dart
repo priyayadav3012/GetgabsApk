@@ -128,14 +128,24 @@ class CallLogRow extends StatelessWidget {
     Color(0xFFD3B8F0), // light purple
   ];
 
+  // Uses `.characters` (Unicode grapheme clusters) instead of raw string
+  // indexing/substring — a name starting with an emoji or other multi-byte
+  // character would otherwise split a surrogate pair and render as a
+  // garbled glyph or throw, which showed up specifically on iPhone contact
+  // names that Android devices didn't happen to trip over.
   String get _initials {
     final name = entry.customerName.trim().isNotEmpty
         ? entry.customerName.trim()
         : entry.phoneNumber;
     if (name.isEmpty) return '#';
-    final words = name.split(RegExp(r'\s+'));
-    if (words.length == 1) return words[0].substring(0, 1).toUpperCase();
-    return (words[0].substring(0, 1) + words[1].substring(0, 1)).toUpperCase();
+    final words = name.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.isEmpty) return '#';
+    final firstChars = words[0].characters;
+    final first = firstChars.isNotEmpty ? firstChars.first : '';
+    if (words.length == 1) return first.toUpperCase();
+    final secondChars = words[1].characters;
+    final second = secondChars.isNotEmpty ? secondChars.first : '';
+    return (first + second).toUpperCase();
   }
 
   Color get _avatarColor {
@@ -238,6 +248,8 @@ class CallLogRow extends StatelessWidget {
                   SizedBox(height: screenW * 0.006),
                   Text(
                     entry.phoneNumber,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         fontSize: screenW * 0.032, color: Colors.grey[500]),
                   ),
@@ -249,16 +261,22 @@ class CallLogRow extends StatelessWidget {
                     const SizedBox(width: 4),
                     Text(
                       directionLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: screenW * 0.032,
                         color: directionColor,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    Text(
-                      '  |  $_dateTimeLabel',
-                      style: TextStyle(
-                          fontSize: screenW * 0.032, color: Colors.grey[500]),
+                    Expanded(
+                      child: Text(
+                        '  |  $_dateTimeLabel',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: screenW * 0.032, color: Colors.grey[500]),
+                      ),
                     ),
                   ],
                 ),
