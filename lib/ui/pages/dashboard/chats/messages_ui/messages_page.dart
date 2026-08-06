@@ -14,6 +14,7 @@ import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/shortmessagesheet.dart';
+import 'package:getgabs/ui/res/widgets/skeleton_loaders.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -235,6 +236,10 @@ class MessagesPage extends StatelessWidget {
               /// ================= CHAT LIST =================
               Expanded(
                 child: Obx(() {
+                  if (messagesPageController.isInitialChatLoading.value) {
+                    return const MessagesSkeleton();
+                  }
+
                   if (messagesPageController.groupedMessages.isEmpty) {
                     return const SizedBox();
                   }
@@ -1086,37 +1091,51 @@ Widget _buildInputField(
             constraints: BoxConstraints(
               maxHeight: mediaQuery.height * 0.15,
             ),
-            child: TextField(
-              controller: messagesPageController.textEditingController,
-              keyboardType: TextInputType.multiline,
-              maxLines: 5,
-              minLines: 1,
-              enableInteractiveSelection: true,
-              selectionControls: MaterialTextSelectionControls(),
-              toolbarOptions: const ToolbarOptions(
-                copy: true,
-                paste: true,
-                cut: true,
-                selectAll: true,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Type a message here....',
-                hintStyle: const TextStyle(color: AppTheme.black54),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20.0),
-                  borderSide: const BorderSide(color: AppTheme.greyColor),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(7.0),
-                  borderSide: const BorderSide(color: AppTheme.greyColor),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20.0),
-                  borderSide: BorderSide(color: AppTheme.boarderColor),
-                ),
-              ),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: messagesPageController.textEditingController,
+              builder: (context, value, child) {
+                return TextField(
+                  controller: messagesPageController.textEditingController,
+                  keyboardType: TextInputType.multiline,
+                  maxLines: 5,
+                  minLines: 1,
+                  enableInteractiveSelection: true,
+                  selectionControls: MaterialTextSelectionControls(),
+                  toolbarOptions: const ToolbarOptions(
+                    copy: true,
+                    paste: true,
+                    cut: true,
+                    selectAll: true,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Type a message here....',
+                    hintStyle: const TextStyle(color: AppTheme.black54),
+                    filled: true,
+                    fillColor: Colors.white,
+                    suffixIcon: value.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close,
+                                color: AppTheme.black54, size: 20),
+                            onPressed: () =>
+                                messagesPageController.textEditingController
+                                    .clear(),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20.0),
+                      borderSide: const BorderSide(color: AppTheme.greyColor),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(7.0),
+                      borderSide: const BorderSide(color: AppTheme.greyColor),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20.0),
+                      borderSide: BorderSide(color: AppTheme.boarderColor),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),

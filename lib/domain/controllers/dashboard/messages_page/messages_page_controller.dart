@@ -800,12 +800,14 @@ if (Get.isRegistered<DashboardController>()) {
         debugPrint(stackTrace.toString());
       }).whenComplete(() {
         isApiCallInProgress = false;
+        if (from == 'outside') isInitialChatLoading.value = false;
         // Mark all received messages as read after loading
         markAllReceivedMessagesAsRead();
       });
     } catch (error, stackTrace) {
       debugPrint('Error: $error');
       debugPrint('Stack Trace: $stackTrace');
+      if (from == 'outside') isInitialChatLoading.value = false;
       // EasyLoading.dismiss();
     }
   }
@@ -945,6 +947,12 @@ if (Get.isRegistered<DashboardController>()) {
   }
 
   RxMap<String, List<Message>> groupedMessages = <String, List<Message>>{}.obs;
+
+  // Drives the initial-load skeleton in MessagesPage — true until the very
+  // first ("outside") loadChatsApi call finishes, success or failure. Kept
+  // separate from isApiCallInProgress so pagination loads (from: 'inside')
+  // never re-trigger the skeleton.
+  var isInitialChatLoading = true.obs;
 
   var textEditingController = TextEditingController();
 

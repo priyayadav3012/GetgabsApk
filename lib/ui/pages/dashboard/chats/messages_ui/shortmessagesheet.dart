@@ -79,7 +79,6 @@ class _ShortMessageSheetState extends State<ShortMessageSheet> {
   List<ShortMessage> _allMessages = [];
   List<ShortMessage> _filteredMessages = [];
   String _searchQuery = '';
-  bool _isSending = false;
 
   @override
   void initState() {
@@ -136,80 +135,17 @@ class _ShortMessageSheetState extends State<ShortMessageSheet> {
   }
 
   // ============================================================
-  // SEND
+  // SELECT — put the template text into the composer for editing
+  // instead of sending it immediately, so the user can review,
+  // edit, or cancel (by clearing the field) before sending.
   // ============================================================
-  Future<void> _sendShortMessage(ShortMessage msg) async {
-    try {
-      setState(() => _isSending = true);
-
-      final userData     = widget.controller.userData;
-      final chatServices = widget.controller.chatServices;
-
-      final parentUserId  = await userData.getParentUserId();
-      final currentUserId = await userData.getLoggedInUserId();
-      final apiKey        = await userData.getApiKey();
-      final userPrivilage = await userData.getUserPrivilage();
-      final userRole      = await userData.getUserRole();
-
-      final effectiveParentId =
-          (parentUserId == '0' || parentUserId.isEmpty)
-              ? currentUserId.toString()
-              : parentUserId;
-
-      final Map<String, dynamic> jsonData = {
-        "parent_user_id":    effectiveParentId,
-        "current_user_id":   currentUserId.toString(),
-        "api_key":           apiKey,
-        "customer_key":      widget.controller.profileWaKey,
-        "messageType":       "servicetemplate",
-        "shortCutMessageId": msg.id,
-        "current_user_role": userRole,
-        "user_privilage":    userPrivilage,
-      };
-
-      final Map<String, String> headers = {
-        "X-Client-GetGabs": apiKey.toString(),
-        "Content-Type":     "application/json",
-      };
-
-      debugPrint('📤 Sending: $jsonData');
-      final response = await chatServices.sendShortMessageService(
-          jsonData, headers: headers);
-      debugPrint('📤 Response: $response');
-
-      Get.back();
-
-      if (response['status'] == true) {
-        widget.controller.currentPage.value = 1;
-        widget.controller.messageChatList.clear();
-        widget.controller.groupedMessages.clear();
-        widget.controller.loadChatsApi(
-          userKey: widget.controller.profileWaKey,
-          from: 'outside',
-        );
-      } else {
-        Get.snackbar(
-          'Error',
-          response['message']?.toString() ?? 'Failed to send',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: const Color(0xFFEA4335),
-          colorText: Colors.white,
-          margin: const EdgeInsets.all(12),
-          borderRadius: 10,
-        );
-      }
-    } catch (e) {
-      debugPrint('❌ sendShortMessage error: $e');
-      Get.back();
-      Get.snackbar('Error', 'Something went wrong',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: const Color(0xFFEA4335),
-          colorText: Colors.white,
-          margin: const EdgeInsets.all(12),
-          borderRadius: 10);
-    } finally {
-      if (mounted) setState(() => _isSending = false);
-    }
+  void _selectShortMessage(ShortMessage msg) {
+    final textController = widget.controller.textEditingController;
+    textController.text = msg.messageBody;
+    textController.selection = TextSelection.fromPosition(
+      TextPosition(offset: textController.text.length),
+    );
+    Get.back();
   }
 
   // ============================================================
@@ -261,7 +197,7 @@ class _ShortMessageSheetState extends State<ShortMessageSheet> {
                   Obx(() {
                     final loading =
                         widget.controller.isShortMessagesLoading.value;
-                    return (loading || _isSending)
+                    return loading
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -421,7 +357,7 @@ class _ShortMessageSheetState extends State<ShortMessageSheet> {
         itemBuilder: (context, index) => _ShortMessageTile(
           msg: _filteredMessages[index],
           screenW: w,
-          onTap: () => _sendShortMessage(_filteredMessages[index]),
+          onTap: () => _selectShortMessage(_filteredMessages[index]),
         ),
       );
     });

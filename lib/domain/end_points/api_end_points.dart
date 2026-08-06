@@ -57,6 +57,7 @@ class _ChatEndPoints {
   final String toggleHandoffUrl = "togglehandoff";
   final String shortMessageList = "shortmessagelist";
   final String sendShortMessage = "send-message";
+  final String voiceCallLogs = "voiceCallLogs";
 }
 
 class _MoreScreenEndPoints {

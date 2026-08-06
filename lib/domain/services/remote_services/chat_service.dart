@@ -59,6 +59,14 @@ Future<dynamic> sendShortMessageService(var data, {var headers}) async {
   );
   return response;
 }
+Future<dynamic> voiceCallLogsService(var data, {var headers}) async {
+  dynamic response = _apiService.postApi(
+    data,
+    ApiEndPoints.baseUrl + ApiEndPoints.chatEndPoints.voiceCallLogs,
+    headers: headers,
+  );
+  return response;
+}
   Future<dynamic>searchCustomer(var data, {var headers}) async {
     dynamic response = _apiService.postApi(
         data, ApiEndPoints.baseUrl + ApiEndPoints.chatEndPoints.searchCustomer,
