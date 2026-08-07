@@ -406,7 +406,9 @@ class MessagesPage extends StatelessWidget {
           right: isSentByMe ? 18 : null,
           left: isSentByMe ? null : 18,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: Colors.white,
               shape: BoxShape.circle,
@@ -418,7 +420,11 @@ class MessagesPage extends StatelessWidget {
                 ),
               ],
             ),
-            child: Text(emoji, style: const TextStyle(fontSize: 14)),
+            child: Text(
+              emoji,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, height: 1),
+            ),
           ),
         ),
       ],
