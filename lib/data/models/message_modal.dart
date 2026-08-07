@@ -34,6 +34,12 @@ class Message {
   final String? noteCreatedBy;
   final String? noteType;
 
+  // ✅ Reaction — WhatsApp reactions arrive as their own message_type ==
+  // 'reaction' entry (see groupMessagesByDate), which is stripped out of the
+  // displayed list and folded into this field on the message it targets, so
+  // it renders as a small emoji badge on that message instead of its own bubble.
+  final String? reactionEmoji;
+
   Message({
     required this.id,
     required this.messageText,
@@ -65,6 +71,9 @@ class Message {
     // ✅ Note
     this.noteCreatedBy,
     this.noteType,
+
+    // ✅ Reaction
+    this.reactionEmoji,
   });
 
   bool get isSentByMe => sender != 1;
@@ -108,6 +117,9 @@ class Message {
     // ✅ Note
     String? noteCreatedBy,
     String? noteType,
+
+    // ✅ Reaction
+    String? reactionEmoji,
   }) {
     return Message(
       id: id ?? this.id,
@@ -137,6 +149,7 @@ class Message {
       hasCallHistory: hasCallHistory ?? this.hasCallHistory,
       noteCreatedBy: noteCreatedBy ?? this.noteCreatedBy,
       noteType: noteType ?? this.noteType,
+      reactionEmoji: reactionEmoji ?? this.reactionEmoji,
     );
   }
 

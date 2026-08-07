@@ -278,8 +278,10 @@ class MessagesPage extends StatelessWidget {
 
                           /// ---------- Messages ----------
                           ...messages.map(
-                            (message) =>
-                                buildMessageWidget(message, mediaQuery),
+                            (message) => _wrapWithReaction(
+                              message,
+                              buildMessageWidget(message, mediaQuery),
+                            ),
                           ),
                         ],
                       );
@@ -382,6 +384,44 @@ class MessagesPage extends StatelessWidget {
       //     ]),
       //   ),
       // ),
+    );
+  }
+
+  // Overlays a small WhatsApp-style emoji badge on the tail corner of an
+  // already-built message bubble — bottom-right for a sent message, bottom-
+  // left for a received one (mirrors BaseMessageUi's tail corner, the one
+  // with borderRadius 0) — without needing every message-type widget to
+  // thread a new parameter down into BaseMessageUi.
+  Widget _wrapWithReaction(Message message, Widget bubble) {
+    final emoji = message.reactionEmoji;
+    if (emoji == null || emoji.isEmpty) return bubble;
+
+    final isSentByMe = message.sender != 1;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        bubble,
+        Positioned(
+          bottom: -8,
+          right: isSentByMe ? 18 : null,
+          left: isSentByMe ? null : 18,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 3,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Text(emoji, style: const TextStyle(fontSize: 14)),
+          ),
+        ),
+      ],
     );
   }
 

@@ -925,12 +925,48 @@ if (Get.isRegistered<DashboardController>()) {
     return a.messageId.compareTo(b.messageId);
   }
 
+  // WhatsApp reactions arrive as their own message with message_type ==
+  // 'reaction' — the payload references the ORIGINAL message via
+  // reaction.message_id, not a message of its own. Strips those entries out
+  // of the displayed list and returns {targetMessageId: emoji} so the caller
+  // can attach the emoji to that message instead of showing raw reaction
+  // JSON as a separate bubble. An empty emoji means the reaction was removed.
+  Map<String, String> _extractReactions(List<Message> messages) {
+    final reactionEntries =
+        messages.where((m) => m.messageType == 'reaction').toList()
+          ..sort(_messageOrder);
+    final Map<String, String> reactionByTargetId = {};
+    for (final r in reactionEntries) {
+      try {
+        final decoded = jsonDecode(r.messageText);
+        final targetId = decoded['reaction']?['message_id']?.toString();
+        final emoji = decoded['reaction']?['emoji']?.toString() ?? '';
+        if (targetId == null || targetId.isEmpty) continue;
+        if (emoji.isEmpty) {
+          reactionByTargetId.remove(targetId);
+        } else {
+          reactionByTargetId[targetId] = emoji;
+        }
+      } catch (_) {}
+    }
+    return reactionByTargetId;
+  }
+
   Map<String, List<Message>> groupMessagesByDate(List<Message> messages) {
+    final reactionByTargetId = _extractReactions(messages);
+    final displayable = messages
+        .where((m) => m.messageType != 'reaction')
+        .map((m) {
+          final emoji = reactionByTargetId[m.messageId];
+          return emoji != null ? m.copyWith(reactionEmoji: emoji) : m;
+        })
+        .toList();
+
     // Order by the authoritative sequence (see _messageOrder) so the displayed
     // order never depends on the order socket events happened to arrive in — a
     // rapid burst of incoming/outgoing messages used to render out of sequence
     // because each was blindly inserted at index 0.
-    final sorted = List<Message>.from(messages)..sort(_messageOrder);
+    final sorted = List<Message>.from(displayable)..sort(_messageOrder);
 
     // Build each day's bucket oldest-first (top → bottom within the day).
     final Map<String, List<Message>> grouped = {};
