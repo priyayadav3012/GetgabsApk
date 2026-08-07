@@ -4,17 +4,27 @@ import 'package:getgabs/ui/res/assets/image_assets.dart';
 
 import '../../../domain/controllers/splash_screen/splash_screen_controller.dart';
 
-class SplashScreen extends StatelessWidget {
-  SplashScreen({super.key});
+class SplashScreen extends StatefulWidget {
+  const SplashScreen({super.key});
 
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
   final splashController = Get.put(SplashScreenController());
 
   @override
+  void initState() {
+    super.initState();
+    splashController.startAnimation();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    SplashScreenController.find.startAnimation();
     var mediaQuery = MediaQuery.of(context).size;
     return Scaffold(
-      // backgroundColor: Colors.white,
+      backgroundColor: Colors.white,
       body: Stack(
         children: [
           Obx(

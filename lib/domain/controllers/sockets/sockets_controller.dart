@@ -22,6 +22,25 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
   late IO.Socket _socket;
   var isAppInForeground = true.obs;
 
+  /// The currently-open chat, if any. Set by [MessagesPageController.onInit]
+  /// and cleared on its close. Incoming socket events are delivered straight
+  /// to this controller instead of each page registering its own raw
+  /// `socket.on(...)` listener — the old approach never called `off()`, so
+  /// listeners accumulated across chat opens/rebuilds and a throw in any one
+  /// stale listener aborted the emitter's dispatch loop before the live chat's
+  /// handler ran, which is why new messages only appeared after a reopen.
+  MessagesPageController? _openChat;
+
+  void registerOpenChat(MessagesPageController controller) {
+    _openChat = controller;
+  }
+
+  void unregisterOpenChat(MessagesPageController controller) {
+    if (identical(_openChat, controller)) {
+      _openChat = null;
+    }
+  }
+
   @override
   void onInit() async {
     super.onInit();
@@ -36,7 +55,15 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
     var userPrivilage = await userData.getUserPrivilage();
     var adminId =
         role == "user" ? await userData.getParentUserId() : userId.toString();
-    var apiKey = await userData.getApiKey();
+
+    // The socket server authenticates against the top-level auth token, NOT
+    // the WhatsApp/facebook_details key that getApiKey() returns (which the
+    // server rejects with "Invalid API key"). Fall back to the REST key only
+    // if no auth token is stored, so we never regress below prior behavior.
+    var apiKey = await userData.getSocketAuthKey();
+    if (apiKey.isEmpty) {
+      apiKey = await userData.getApiKey();
+    }
 
     if (apiKey.isEmpty) {
       debugPrint('❌ Socket initialization aborted: API key is undefined or empty');
@@ -72,9 +99,14 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
             .enableForceNew()
             .build());
 
+    // Error-only listeners: silent during normal operation, but surface the
+    // reason (e.g. "Invalid API key", disconnects) if the socket ever fails to
+    // connect or drops — useful for diagnosing live-chat outages.
+    _socket.on('connect_error', (err) => debugPrint('socket connect_error: $err'));
+    _socket.on('error', (err) => debugPrint('socket error: $err'));
+    _socket.on('disconnect', (reason) => debugPrint('socket disconnected: $reason'));
+
     _socket.on('connect', (data) {
-      print('Connected to socket');
-      print(data);
       var userinfo = {
         'platform': Platform, // new parameter
         'role': userRole,
@@ -302,23 +334,30 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
           // );
         }
 
+        // Deliver the message into the open chat live (WhatsApp-style) so it
+        // renders instantly without needing a reopen. Guarded by the wa-key so
+        // a message for a different chat never lands in the wrong conversation.
+        final openChat = _openChat;
+        final bool isForOpenChat =
+            openChat != null && openChat.profileWaKey == incomingWaKey;
+        if (isForOpenChat) {
+          try {
+            openChat.handleIncomingMessage(data);
+          } catch (e) {
+            debugPrint('Error delivering live message to open chat: $e');
+          }
+        }
+
         if (Get.currentRoute.contains('/MessagesPage')) {
           print('Socket notifications');
-          final MessagesPageController? messagesPageController =
-              Get.isRegistered<MessagesPageController>()
-                  ? Get.find<MessagesPageController>()
-                  : null;
-
-          if (messagesPageController != null) {
-            if (incomingWaKey != messagesPageController.profileWaKey) {
-              //   dc.refreshActiveChatList();
+          if (isForOpenChat) {
+            // Same chat is open and in the foreground: no notification needed.
+            if (!isAppInForeground.value) {
               handleNotification(data);
-            } else {
-              if (!isAppInForeground.value) {
-                //  dc.refreshActiveChatList();
-                handleNotification(data);
-              }
             }
+          } else {
+            // A chat is open but the message is for a different conversation.
+            handleNotification(data);
           }
         } else {
           //  dc.refreshActiveChatList();
@@ -326,6 +365,18 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
         }
       } catch (e) {
         print(e);
+      }
+    });
+
+    // Single app-lifetime listener for delivery-status updates, routed to the
+    // open chat. Previously each MessagesPageController registered its own
+    // 'messagestatus' listener and never removed it, so these accumulated the
+    // same way 'chatdata' did.
+    _socket.on('messagestatus', (data) {
+      try {
+        _openChat?.handelIcomingMessageStatus(data);
+      } catch (e) {
+        print('❌ Error handling message status: $e');
       }
     });
   }

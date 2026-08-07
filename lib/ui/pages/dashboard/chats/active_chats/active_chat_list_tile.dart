@@ -15,11 +15,11 @@ class ActiveChatListTile extends StatelessWidget {
   ActiveChatListTile({super.key, required this.profile});
 
   // ✅ Flavor check — same as api_end_points.dart
-  static bool get _isMessagedly =>
-      LoginWithEmailController.currentFlavor == 'messagedly';
+    static bool get _isMessagedly =>
+      LoginWithEmailController.currentFlavorNormalized == 'messagedly';
 
-  static bool get _isScalewiz =>
-      LoginWithEmailController.currentFlavor == 'scalewiz';
+    static bool get _isScalewiz =>
+      LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
 
   static Color get _brandColor => _isMessagedly
       ? const Color(0xff4242D4)

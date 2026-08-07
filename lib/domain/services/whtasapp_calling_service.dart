@@ -602,11 +602,11 @@ class WhatsAppCallingService {
       final params = CallKitParams(
         id: callKitId,
         nameCaller: displayNameShort,
-        appName: AppTheme.currentFlavor == 'messagedly'
-            ? 'Messagedly'
-            : AppTheme.currentFlavor == 'scalewiz'
-                ? 'Scalewiz'
-                : 'GetGabs',
+        appName: AppTheme.currentFlavor.toLowerCase() == 'messagedly'
+          ? 'Messagedly'
+          : AppTheme.currentFlavorNormalized == 'scalewiz'
+            ? 'Scalewiz'
+            : 'GetGabs',
         avatar: avatarUrl,
         handle: callerNumber,
         type: 0,
@@ -1334,21 +1334,21 @@ class IncomingCallCard extends StatelessWidget {
 
     // ✅ Per-flavor branding for the incoming-call header — was hardcoded to
     // GetGabs green/"G"/"GetGabs Audio Calling" for all three apps.
-    final Color brandColor = AppTheme.currentFlavor == 'messagedly'
-        ? const Color(0xff4242D4)
-        : AppTheme.currentFlavor == 'scalewiz'
-            ? const Color(0xff0E7C74)
-            : const Color(0xFF034737);
-    final String brandLetter = AppTheme.currentFlavor == 'messagedly'
-        ? 'M'
-        : AppTheme.currentFlavor == 'scalewiz'
-            ? 'S'
-            : 'G';
-    final String brandLabel = AppTheme.currentFlavor == 'messagedly'
-        ? 'Messagedly Audio Calling'
-        : AppTheme.currentFlavor == 'scalewiz'
-            ? 'Scalewiz Audio Calling'
-            : 'GetGabs Audio Calling';
+    final Color brandColor = AppTheme.currentFlavor.toLowerCase() == 'messagedly'
+      ? const Color(0xff4242D4)
+      : AppTheme.currentFlavorNormalized == 'scalewiz'
+        ? const Color(0xff0E7C74)
+        : const Color(0xFF034737);
+    final String brandLetter = AppTheme.currentFlavor.toLowerCase() == 'messagedly'
+      ? 'M'
+      : AppTheme.currentFlavorNormalized == 'scalewiz'
+        ? 'S'
+        : 'G';
+    final String brandLabel = AppTheme.currentFlavor.toLowerCase() == 'messagedly'
+      ? 'Messagedly Audio Calling'
+      : AppTheme.currentFlavorNormalized == 'scalewiz'
+        ? 'Scalewiz Audio Calling'
+        : 'GetGabs Audio Calling';
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),

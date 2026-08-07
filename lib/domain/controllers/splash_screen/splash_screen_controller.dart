@@ -8,11 +8,12 @@ import '../../../main.dart';
 
 class SplashScreenController extends GetxController {
   static SplashScreenController get find => Get.find();
-  //change splash screen both the images!!!!!!!!!!!!!!!!!!!!!!
+  // Change splash screen both the images if needed.
   // UserPreference userPreference = UserPreference();
 
   final box = GetStorage();
   RxBool animate = false.obs;
+  bool _animationStarted = false;
 
   @override
   void onInit() {
@@ -45,6 +46,9 @@ class SplashScreenController extends GetxController {
   }
 
   Future<void> startAnimation() async {
+    if (_animationStarted) return;
+    _animationStarted = true;
+
     try {
       // Flip immediately (post-frame, not delayed) so the logo starts
       // fading in on the very first frame instead of sitting on a blank

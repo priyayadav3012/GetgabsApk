@@ -22,10 +22,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 class _C {
   /// Evaluates whether the current active app compilation targets 'messagedly'
-  static bool get isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
+  static bool get isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
 
   /// Evaluates whether the current active app compilation targets 'scalewiz'
-  static bool get isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+  static bool get isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
 
   // Constant global canvas deep background color setup
   static const bg        = Color(0xFF0A0F0D);
@@ -306,6 +306,7 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                           label:       'Profile',
                           subtitle:    'View your profile',
                           iconBgColor: _C.green, // Dynamic client system visual color key binding map configuration
+                          showProfilePhoto: true, // show uploaded photo here
                           onTap:       () => Get.toNamed(AppRoute.profileDetailsPage),
                         ),
                       ],
@@ -454,24 +455,12 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
         ),
         child: Row(
           children: [
-            // User Avatar Initial representation block
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                    colors: [_C.green, _C.greenDark],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(15),
-                boxShadow: [
-                  BoxShadow(
-                      color: _C.green.withOpacity(0.25),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4)),
-                ],
-              ),
-              child: Center(
+            // User avatar: shows the uploaded profile photo when available,
+            // otherwise falls back to the user's initials. Wrapped in Obx so it
+            // updates the moment a new photo is saved on the profile screen.
+            Obx(() {
+              final photoUrl = profileController.profileImageUrl.value ?? '';
+              final initials = Center(
                 child: Text(
                   getInitialsSafe(profileController.userName.value),
                   style: const TextStyle(
@@ -479,8 +468,38 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                       fontSize: 22,
                       fontWeight: FontWeight.w800),
                 ),
-              ),
-            ),
+              );
+              return Container(
+                width: 52,
+                height: 52,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                      colors: [_C.green, _C.greenDark],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(15),
+                  boxShadow: [
+                    BoxShadow(
+                        color: _C.green.withOpacity(0.25),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4)),
+                  ],
+                ),
+                child: photoUrl.isEmpty
+                    ? initials
+                    : Image.network(
+                        photoUrl,
+                        width: 52,
+                        height: 52,
+                        fit: BoxFit.cover,
+                        // Keep initials visible while the photo loads / on error.
+                        loadingBuilder: (context, child, progress) =>
+                            progress == null ? child : initials,
+                        errorBuilder: (context, error, stack) => initials,
+                      ),
+              );
+            }),
       
             const SizedBox(width: 14),
       
@@ -525,6 +544,9 @@ class _MenuItemData {
   final Color        iconBgColor;
   final Color        labelColor;
   final VoidCallback onTap;
+  // When true, the leading icon is replaced by the user's uploaded profile
+  // photo (falls back to [iconPath] when there is no photo / it fails to load).
+  final bool         showProfilePhoto;
 
   const _MenuItemData({
     required this.iconPath,
@@ -533,6 +555,7 @@ class _MenuItemData {
     required this.iconBgColor,
     this.labelColor = const Color(0xFF13111C),
     required this.onTap,
+    this.showProfilePhoto = false,
   });
 }
 
@@ -581,6 +604,36 @@ class _MenuRow extends StatelessWidget {
   final _MenuItemData item;
   const _MenuRow({required this.item});
 
+  // The user's uploaded profile photo for the Profile row, falling back to the
+  // item's SVG icon while it loads / when there is no photo. Reactive so it
+  // updates the instant a new photo is saved on the profile screen.
+  Widget _profilePhotoOrIcon() {
+    final Widget iconFallback = Padding(
+      padding: const EdgeInsets.all(9),
+      child: SvgPicture.asset(
+        item.iconPath,
+        colorFilter: ColorFilter.mode(item.iconBgColor, BlendMode.srcIn),
+      ),
+    );
+
+    if (!Get.isRegistered<ProfileController>()) return iconFallback;
+    final pc = Get.find<ProfileController>();
+
+    return Obx(() {
+      final url = pc.profileImageUrl.value ?? '';
+      if (url.isEmpty) return iconFallback;
+      return Image.network(
+        url,
+        width: 40,
+        height: 40,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : iconFallback,
+        errorBuilder: (context, error, stack) => iconFallback,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -592,22 +645,28 @@ class _MenuRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           child: Row(
             children: [
-              // Vector Svg Graphic Icon Frame box
+              // Vector Svg Graphic Icon Frame box (or the profile photo for the
+              // Profile item).
               Container(
                 width: 40,
                 height: 40,
+                clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: item.iconBgColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(11),
                   border: Border.all(
                       color: item.iconBgColor.withOpacity(0.25)),
                 ),
-                padding: const EdgeInsets.all(9),
-                child: SvgPicture.asset(
-                  item.iconPath,
-                  colorFilter: ColorFilter.mode(
-                      item.iconBgColor, BlendMode.srcIn),
-                ),
+                child: item.showProfilePhoto
+                    ? _profilePhotoOrIcon()
+                    : Padding(
+                        padding: const EdgeInsets.all(9),
+                        child: SvgPicture.asset(
+                          item.iconPath,
+                          colorFilter: ColorFilter.mode(
+                              item.iconBgColor, BlendMode.srcIn),
+                        ),
+                      ),
               ),
 
               const SizedBox(width: 13),

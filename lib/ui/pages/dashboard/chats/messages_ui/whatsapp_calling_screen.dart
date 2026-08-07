@@ -45,8 +45,8 @@ class _WhatsAppCallingScreenState extends State<WhatsAppCallingScreen>
   // Scalewiz: its teal isn't green either, so isMessagedly evaluated true
   // and the calling screen showed Messagedly's blue on Scalewiz. Checking
   // the actual flavor directly is correct for all three apps.
-  bool get isMessagedly => AppTheme.currentFlavor == 'messagedly';
-  bool get isScalewiz => AppTheme.currentFlavor == 'scalewiz';
+  bool get isMessagedly => AppTheme.currentFlavor.toLowerCase() == 'messagedly';
+  bool get isScalewiz => AppTheme.currentFlavorNormalized == 'scalewiz';
 
   // 🎨 DYNAMIC COLORS DEFINITION
   Color get primaryColor => isMessagedly

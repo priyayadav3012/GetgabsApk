@@ -155,11 +155,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       id: safeId,
       nameCaller: displayNameShort,
       handle: callerNumber,
-      appName: AppTheme.currentFlavor == 'messagedly'
+        appName: AppTheme.currentFlavor.toLowerCase() == 'messagedly'
           ? 'Messagedly'
-          : AppTheme.currentFlavor == 'scalewiz'
-              ? 'Scalewiz'
-              : 'GetGabs',
+          : AppTheme.currentFlavorNormalized == 'scalewiz'
+            ? 'Scalewiz'
+            : 'GetGabs',
       avatar: avatarUrl,
       type: 0,
       duration: 60000,
@@ -257,7 +257,7 @@ Future<void> main() async {
   WhatsAppCallingConfig.setupCallKitEvents();
   await _initGlobalCalling();
   WhatsAppCallingConfig.initMethodChannel();
-
+print('Flavor = ${AppTheme.currentFlavor}');
   runApp(const MyApp());
 
   // Cap the native splash to ~1s regardless of how long the rest of startup
@@ -424,11 +424,11 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return GetMaterialApp(
-      title: AppTheme.currentFlavor == 'messagedly'
+        title: AppTheme.currentFlavor.toLowerCase() == 'messagedly'
           ? 'Messagedly'
-          : AppTheme.currentFlavor == 'scalewiz'
-              ? 'Scalewiz'
-              : 'GetGabs',
+          : AppTheme.currentFlavorNormalized == 'scalewiz'
+            ? 'Scalewiz'
+            : 'GetGabs',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
       debugShowCheckedModeBanner: false,
       locale: const Locale('en', 'US'),
@@ -444,7 +444,8 @@ class _MyAppState extends State<MyApp> {
       // ringing calls, teardown, and re-entrancy — a no-op in normal routing.
       routingCallback: (routing) {
         WhatsAppCallingConfig.restoreCallScreenIfActive();
-      },
+print("Flavor = ${AppTheme.currentFlavor}");
+print("Title = ${AppTheme.currentFlavor.toLowerCase() == 'messagedly' ? 'Messagedly' : AppTheme.currentFlavorNormalized == 'scalewiz' ? 'Scalewiz' : 'GetGabs'}");      },
       onReady: () {
         debugPrint('✅ App onReady');
         _initializeCallListener();

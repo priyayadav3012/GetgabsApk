@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
+import 'package:getgabs/ui/pages/dashboard/call_logs/call_logs_screen.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/chats.dart';
 import 'package:getgabs/ui/pages/dashboard/more/more_screen.dart';
 import 'package:getgabs/ui/res/assets/image_assets.dart';
@@ -22,6 +23,7 @@ class DashboardScreen extends StatelessWidget {
           index: controller.tabIndex,
           children: [
             ChatsScreen(),
+            const CallLogsScreen(),
             const MoreScreen()
           ],
         ),
@@ -51,6 +53,11 @@ class DashboardScreen extends StatelessWidget {
                   icon: SvgPicture.asset(ImageAssets.messageChatIcon, height: 24, width: 24,),
                   label: 'Chats',
                   activeIcon: SvgPicture.asset(ImageAssets.messageChatIcon, height: 24, width: 24, color: AppTheme.authButtonColor,),
+                ),
+                BottomNavigationBarItem(
+                  icon: const Icon(Icons.call, size: 24),
+                  label: 'Call Logs',
+                  activeIcon: Icon(Icons.call, size: 24, color: AppTheme.authButtonColor),
                 ),
                 BottomNavigationBarItem(
                   icon: SvgPicture.asset(ImageAssets.menuIcon, height: 24, width: 24,),

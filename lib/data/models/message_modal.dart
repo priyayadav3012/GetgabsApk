@@ -20,11 +20,15 @@ class Message {
   final bool local;
   final String? replyformsg;
 
-  // ✅ Voice Call Fields
+  // ✅ Voice Call Fields (parsed out of the nested `callHistory` JSON string
+  // the API sends alongside message_type == 'interactive' call-related
+  // messages, for BOTH call directions — see Message.fromJson)
   final int? callDurationSeconds;
   final String? callStatus;
   final String? callType;
-final String? direction;
+  final String? direction;
+  final String? callConnectedAt;
+  final bool hasCallHistory;
 
   // ✅ Note Fields (Assign/Co-Assign/Team-Assign responses — message_type == 'note')
   final String? noteCreatedBy;
@@ -55,6 +59,8 @@ final String? direction;
     this.callStatus,
     this.callType,
     this.direction,
+    this.callConnectedAt,
+    this.hasCallHistory = false,
 
     // ✅ Note
     this.noteCreatedBy,
@@ -96,6 +102,8 @@ final String? direction;
     String? callStatus,
     String? callType,
     String? direction,
+    String? callConnectedAt,
+    bool? hasCallHistory,
 
     // ✅ Note
     String? noteCreatedBy,
@@ -125,12 +133,32 @@ final String? direction;
       callStatus: callStatus ?? this.callStatus,
       callType: callType ?? this.callType,
       direction: direction ?? this.direction,
+      callConnectedAt: callConnectedAt ?? this.callConnectedAt,
+      hasCallHistory: hasCallHistory ?? this.hasCallHistory,
       noteCreatedBy: noteCreatedBy ?? this.noteCreatedBy,
       noteType: noteType ?? this.noteType,
     );
   }
 
   factory Message.fromJson(Map<String, dynamic> json) {
+    // `callHistory` arrives as a JSON-encoded string (or the literal string
+    // "null") alongside message_type == 'interactive' call-related messages —
+    // it holds the actual call_status/call_duration_seconds/direction data
+    // for BOTH call directions (USER_INITIATED = incoming, BUSINESS_INITIATED
+    // = outgoing); those are NOT top-level fields on the message itself.
+    Map<String, dynamic>? callHistory;
+    final rawCallHistory = json['callHistory'];
+    if (rawCallHistory is String &&
+        rawCallHistory.isNotEmpty &&
+        rawCallHistory != 'null') {
+      try {
+        final decoded = jsonDecode(rawCallHistory);
+        if (decoded is Map<String, dynamic>) callHistory = decoded;
+      } catch (_) {}
+    } else if (rawCallHistory is Map) {
+      callHistory = Map<String, dynamic>.from(rawCallHistory);
+    }
+
     return Message(
       id: json['id'] ?? 0,
       // Regular messages use 'message_text'; the Assign/Co-Assign/Team-Assign
@@ -163,20 +191,21 @@ final String? direction;
       ),
 
       replyformsg: json['replyformsg'] ?? "",
-       direction: json['direction'] ?? '',
-      // ✅ Voice Call Data
-      callDurationSeconds:
-          json['call_duration_seconds'] ?? 0,
+
+      // ✅ Voice Call Data — from the nested callHistory JSON, not top-level
+      // keys. Works identically regardless of call direction (incoming or
+      // outgoing) since callHistory carries a `direction` field itself.
+      direction: callHistory?['direction']?.toString() ?? '',
+      callDurationSeconds: callHistory?['call_duration_seconds'] ?? 0,
+      callStatus: callHistory?['call_status']?.toString() ?? '',
+      callConnectedAt: callHistory?['call_connected_at']?.toString(),
+      hasCallHistory: callHistory != null,
 
       // ✅ Note Data
       noteCreatedBy: json['note_created_by'] ?? '',
       noteType: json['note_type'] ?? '',
 
-      callStatus:
-          json['call_status'] ?? '',
-
-      callType:
-          json['message_sub_type'] ?? '',
+      callType: json['message_sub_type'] ?? '',
     );
   }
 

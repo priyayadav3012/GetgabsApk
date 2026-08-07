@@ -305,9 +305,21 @@ final TextEditingController headerTextController = TextEditingController();
   void onInit() {
     super.onInit();
 
+    // Register as the open chat IMMEDIATELY and synchronously, before any
+    // await — so incoming socket messages are delivered live even if the
+    // initial API setup below is still running or fails. (Previously this
+    // happened only at the end of the async setup, so any earlier throw left
+    // the chat unregistered and live delivery silently dead.)
+    if (Get.isRegistered<SocketsController>()) {
+      _socketsController = Get.find<SocketsController>();
+      _socketsController.registerOpenChat(this);
+    } else {
+      debugPrint('SocketsController not registered when opening chat!');
+    }
+
     // Initialize user info first to avoid race conditions
     _initializeUserInfoAndSetup();
-    
+
     // userData.clearAllData();
     debounce(searchQuery, (_) => searchTemplates(),
         time: const Duration(milliseconds: 500));
@@ -337,16 +349,12 @@ final TextEditingController headerTextController = TextEditingController();
         groupedMessages.assignAll(groupMessagesByDate(messageChatList));
       });
 
-      // Step 4: ONLY NOW register socket listeners (after user info is ready)
+      // Open-chat registration already happened synchronously in onInit.
+      // SocketsController owns the single 'chatdata'/'messagestatus' listeners
+      // and routes events straight to this controller; we no longer call
+      // socket.on() per-page (that leaked listeners and broke live delivery).
       _socketsController = Get.find<SocketsController>();
-
-      _socketsController.socket.on('chatdata', (data) {
-        debugPrint('messagecontgroller');
-        handleIncomingMessage(data);
-      });
-      _socketsController.socket.on('messagestatus', (data) {
-        handelIcomingMessageStatus(data);
-      });
+      _socketsController.registerOpenChat(this);
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         var dc = Get.find<DashboardController>();
@@ -421,11 +429,19 @@ final TextEditingController headerTextController = TextEditingController();
         final fresh = Message.fromJson(raw);
         final index = messageChatList
             .indexWhere((msg) => msg.messageId == fresh.messageId);
-        if (index != -1 &&
-            messageChatList[index].deliveryStatus?.toLowerCase() !=
-                fresh.deliveryStatus?.toLowerCase()) {
-          messageChatList[index] = messageChatList[index]
-              .copyWith(deliveryStatus: fresh.deliveryStatus);
+        if (index == -1) continue;
+        final current = messageChatList[index];
+        final statusChanged = current.deliveryStatus?.toLowerCase() !=
+            fresh.deliveryStatus?.toLowerCase();
+        // Backfill the real server id for our own just-sent messages (they
+        // start at id 0 until confirmed) so they take their correct place in
+        // the id-ordered sequence, even if the send response didn't return it.
+        final needsId = current.id <= 0 && fresh.id > 0;
+        if (statusChanged || needsId) {
+          messageChatList[index] = current.copyWith(
+            deliveryStatus: statusChanged ? fresh.deliveryStatus : null,
+            id: needsId ? fresh.id : null,
+          );
           changed = true;
         }
       }
@@ -784,12 +800,14 @@ if (Get.isRegistered<DashboardController>()) {
         debugPrint(stackTrace.toString());
       }).whenComplete(() {
         isApiCallInProgress = false;
+        if (from == 'outside') isInitialChatLoading.value = false;
         // Mark all received messages as read after loading
         markAllReceivedMessagesAsRead();
       });
     } catch (error, stackTrace) {
       debugPrint('Error: $error');
       debugPrint('Stack Trace: $stackTrace');
+      if (from == 'outside') isInitialChatLoading.value = false;
       // EasyLoading.dismiss();
     }
   }
@@ -865,25 +883,76 @@ if (Get.isRegistered<DashboardController>()) {
             profileWaKey); // Replace 'your_user_key' with the actual user key
   }
 
-  Map<String, List<Message>> groupMessagesByDate(List<Message> messages) {
-    Map<String, List<Message>> groupedMessages = {};
-    for (var message in messages) {
-      String date = message.createdAt.toString().split(' ')[0];
-      if (groupedMessages[date] == null) {
-        groupedMessages[date] = [];
-      }
-      groupedMessages[date]!.add(message);
-    }
-    // Reverse the messages within each date group
-    groupedMessages.forEach((key, value) {
-      value = value.reversed.toList();
-      groupedMessages[key] = value;
-    });
+  /// Timestamp basis for our own optimistic (sent) messages that MATCHES how
+  /// received messages are stored — [Message.fromJson] shifts the server's UTC
+  /// `created_at` by +5:30. Keeping sent and received on the SAME basis makes
+  /// `createdAt` a correct, consistent sort key, so a burst of messages
+  /// sent/received together renders in the right sequence instead of depending
+  /// on the (arbitrary) order socket events arrived in. The bubbles read
+  /// `.hour`/`.minute` (wall clock), so the displayed time is unchanged.
+  DateTime _messageTimestampNow() =>
+      DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
 
-    return groupedMessages;
+  /// Authoritative ordering for two messages.
+  ///
+  /// The server's monotonic `id` is the single source of truth for sequence —
+  /// it reflects true creation order and is immune to the whole-second rounding
+  /// of incoming WhatsApp timestamps and to device-vs-server clock skew (which
+  /// is exactly what made a late-delivered incoming message land *after* an
+  /// outgoing one during rapid back-and-forth). A message we just sent has no
+  /// server id yet (`id == 0`); it is by definition the newest thing in the
+  /// chat, so it sorts last until the server confirms it and its real id
+  /// arrives (via [updateMessageId] or the status resync).
+  int _messageOrder(Message a, Message b) {
+    // PRIMARY: true send time.
+    //
+    // A received message carries the WhatsApp timestamp — the customer's real
+    // send time — and our own sent messages use the same +5:30 basis (see
+    // _messageTimestampNow). So createdAt reflects when each message was
+    // actually sent, NOT when it happened to reach us. This is what makes a
+    // late-delivered incoming message slot into its correct earlier position
+    // instead of dropping to the bottom below messages we sent afterwards.
+    //
+    // (The server's monotonic `id` is deliberately NOT the primary key: it is
+    // assigned when the message is inserted server-side, so a message delayed
+    // in the WhatsApp→webhook pipeline gets a *later* id than its true send
+    // order — which reordered the chat wrongly.)
+    final byTime = a.createdAt.compareTo(b.createdAt);
+    if (byTime != 0) return byTime;
+    // Same second (incoming timestamps are whole-second) → break the tie
+    // deterministically with the server id, then the message id.
+    if (a.id > 0 && b.id > 0 && a.id != b.id) return a.id.compareTo(b.id);
+    return a.messageId.compareTo(b.messageId);
+  }
+
+  Map<String, List<Message>> groupMessagesByDate(List<Message> messages) {
+    // Order by the authoritative sequence (see _messageOrder) so the displayed
+    // order never depends on the order socket events happened to arrive in — a
+    // rapid burst of incoming/outgoing messages used to render out of sequence
+    // because each was blindly inserted at index 0.
+    final sorted = List<Message>.from(messages)..sort(_messageOrder);
+
+    // Build each day's bucket oldest-first (top → bottom within the day).
+    final Map<String, List<Message>> grouped = {};
+    for (final message in sorted) {
+      final date = message.createdAt.toString().split(' ')[0];
+      (grouped[date] ??= <Message>[]).add(message);
+    }
+
+    // Emit date keys newest-day-first so the reverse:true ListView puts the
+    // most recent day at the bottom of the screen (WhatsApp layout).
+    final orderedKeys = grouped.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+    return {for (final key in orderedKeys) key: grouped[key]!};
   }
 
   RxMap<String, List<Message>> groupedMessages = <String, List<Message>>{}.obs;
+
+  // Drives the initial-load skeleton in MessagesPage — true until the very
+  // first ("outside") loadChatsApi call finishes, success or failure. Kept
+  // separate from isApiCallInProgress so pagination loads (from: 'inside')
+  // never re-trigger the skeleton.
+  var isInitialChatLoading = true.obs;
 
   var textEditingController = TextEditingController();
 
@@ -896,7 +965,7 @@ if (Get.isRegistered<DashboardController>()) {
         DateTime.now().millisecondsSinceEpoch.toString(); // Temporary ID
 
     var newMessage = Message(
-        id: messageChatList.length + 1,
+        id: 0, // 0 = optimistic (not yet server-confirmed); real id set on ack
         messageText: textEditingController.text,
         messageId: tempMessageId,
         messageType: "text",
@@ -906,8 +975,8 @@ if (Get.isRegistered<DashboardController>()) {
         markMsgAsRead: false,
         seenByUser: false,
         deliveryStatus: "sending", // Temporary status
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdAt: _messageTimestampNow(),
+        updatedAt: _messageTimestampNow(),
         replyformsg: '');
 
     messageChatList.insert(0, newMessage);
@@ -953,7 +1022,7 @@ if (Get.isRegistered<DashboardController>()) {
         DateTime.now().millisecondsSinceEpoch.toString(); // Temporary ID
 
     var newMessage = Message(
-        id: messageChatList.length + 1, // Generate a new id
+        id: 0, // 0 = optimistic (not yet server-confirmed); real id set on ack
         messageText: media, // No text for media message
         messageId: tempMessageId, // Generate a unique messageId
         messageType: mediaType, // Message type: image or video
@@ -962,8 +1031,8 @@ if (Get.isRegistered<DashboardController>()) {
         seenByAdmin: false,
         markMsgAsRead: false,
         seenByUser: false,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdAt: _messageTimestampNow(),
+        updatedAt: _messageTimestampNow(),
         local: true,
         deliveryStatus: "sending",
         replyformsg: '',
@@ -1015,15 +1084,34 @@ if (Get.isRegistered<DashboardController>()) {
       if (value['status']) {
         print(value);
         var actualMessageId = value['message']['message_id'].toString();
-        updateMessageId(
-            tempMessageId, actualMessageId); // Update message ID in list
+        // Capture the server's numeric id if the response carries one, so this
+        // message joins the id-ordered sequence in its correct position. If it
+        // doesn't, the status resync backfills it from the server shortly.
+        final serverId =
+            int.tryParse(value['message']['id']?.toString() ?? '');
+        final serverCreatedAt = value['message']['created_at']?.toString();
+        updateMessageId(tempMessageId, actualMessageId,
+            serverId: serverId, serverCreatedAt: serverCreatedAt);
       } else {
         print(value);
       }
     }).onError((error, stackTrace) {});
   }
 
-  void updateMessageId(String tempMessageId, String actualMessageId) {
+  /// Parses a server timestamp string onto the SAME basis as received
+  /// messages (see [Message.fromJson], which shifts UTC by +5:30), so all
+  /// messages share one time basis and sort consistently.
+  DateTime? _parseServerTimestamp(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return DateTime.parse(raw).add(const Duration(hours: 5, minutes: 30));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void updateMessageId(String tempMessageId, String actualMessageId,
+      {int? serverId, String? serverCreatedAt}) {
     int index =
         messageChatList.indexWhere((msg) => msg.messageId == tempMessageId);
     print(index);
@@ -1031,8 +1119,15 @@ if (Get.isRegistered<DashboardController>()) {
     if (index != -1) {
       // The API confirmed the message reached the server, so it's at least
       // "sent" now — swap the temp ID and clear the "sending" clock icon.
-      messageChatList[index] = messageChatList[index]
-          .copyWith(messageId: actualMessageId, deliveryStatus: 'sent');
+      // Also adopt the server's created_at so our optimistic (device-clock)
+      // timestamp is replaced by the authoritative one — this makes the LIVE
+      // order match what a reopen (server-loaded) shows, even if the device
+      // clock drifts from the server.
+      messageChatList[index] = messageChatList[index].copyWith(
+          messageId: actualMessageId,
+          deliveryStatus: 'sent',
+          id: (serverId != null && serverId > 0) ? serverId : null,
+          createdAt: _parseServerTimestamp(serverCreatedAt));
       print(messageChatList[index].messageText);
       print(actualMessageId);
       print('datatemplateeeee');
@@ -1121,8 +1216,11 @@ if (Get.isRegistered<DashboardController>()) {
         final messageType = message['message_type'];
         // sendMediaMessage(key, messageText, messageType);
         var actualMessageId = message['message_id'].toString();
-        updateMessageId(
-            tempMessageId, actualMessageId); // Update message ID in list
+        final serverId = int.tryParse(message['id']?.toString() ?? '');
+        final serverCreatedAt = message['created_at']?.toString();
+        updateMessageId(tempMessageId, actualMessageId,
+            serverId: serverId,
+            serverCreatedAt: serverCreatedAt); // sync id + server time
       } else {
         print('Failed to send message');
       }
@@ -1137,7 +1235,7 @@ if (Get.isRegistered<DashboardController>()) {
         DateTime.now().millisecondsSinceEpoch.toString(); // Temporary ID
 
     var newMessage = Message(
-        id: messageChatList.length + 1,
+        id: 0, // 0 = optimistic (not yet server-confirmed); real id set on ack
         messageText: messageText,
         messageId: tempMessageId,
         messageType: "template",
@@ -1148,8 +1246,8 @@ if (Get.isRegistered<DashboardController>()) {
         seenByUser: false,
         templateData: template,
         deliveryStatus: "sending", // Temporary status
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdAt: _messageTimestampNow(),
+        updatedAt: _messageTimestampNow(),
         replyformsg: '');
 
     messageChatList.insert(0, newMessage);
@@ -2010,6 +2108,11 @@ if (Get.isRegistered<DashboardController>()) {
   @override
   void onClose() {
     _stopStatusResync();
+    // Stop receiving live socket events for this (now-closing) chat so
+    // SocketsController never delivers into a disposed controller.
+    if (Get.isRegistered<SocketsController>()) {
+      Get.find<SocketsController>().unregisterOpenChat(this);
+    }
     scrollController.removeListener(_scrollListener);
     scrollController.dispose();
     profileWaKey = '';

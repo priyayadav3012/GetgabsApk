@@ -14,6 +14,7 @@ import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/shortmessagesheet.dart';
+import 'package:getgabs/ui/res/widgets/skeleton_loaders.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -22,6 +23,7 @@ import '../../../../../data/models/message_modal.dart';
 import '../../../chat_uis/audio_message_ui/audio_message_ui.dart';
 import '../../../chat_uis/base_message_ui.dart';
 import '../../../chat_uis/button_message_ui.dart';
+import '../../../chat_uis/call_message_ui/call_message_ui.dart';
 import '../../../chat_uis/document_message/document_message_ui.dart';
 import '../../../chat_uis/image_message_ui/image_message_ui.dart';
 import '../../../chat_uis/location_message_ui/location_message_ui.dart';
@@ -43,9 +45,17 @@ class MessagesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var mediaQuery = MediaQuery.of(context).size;
-    // var messagesPageController = Get.find<MessagesPageController>();
-    final MessagesPageController messagesPageController = Get.put(
-        MessagesPageController(
+    // Reuse the existing controller when this same chat is rebuilt (keyboard
+    // open, orientation, parent rebuild, etc.) instead of creating a brand-new
+    // one — a fresh Get.put on every build re-ran onInit (refetching chats and
+    // re-marking read) and churned the open-chat registration. A different
+    // profileWaKey means we navigated to another conversation, so create fresh.
+    final bool sameChatAlreadyOpen =
+        Get.isRegistered<MessagesPageController>() &&
+            Get.find<MessagesPageController>().profileWaKey == profileWaKey;
+    final MessagesPageController messagesPageController = sameChatAlreadyOpen
+        ? Get.find<MessagesPageController>()
+        : Get.put(MessagesPageController(
             profileWaKey, profile.profileWaId, 'active', profile));
 
     return Scaffold(
@@ -226,6 +236,10 @@ class MessagesPage extends StatelessWidget {
               /// ================= CHAT LIST =================
               Expanded(
                 child: Obx(() {
+                  if (messagesPageController.isInitialChatLoading.value) {
+                    return const MessagesSkeleton();
+                  }
+
                   if (messagesPageController.groupedMessages.isEmpty) {
                     return const SizedBox();
                   }
@@ -391,7 +405,7 @@ if (message.messageType == 'text') {
     if (body != null && body.isNotEmpty) displayText = body;
   } catch (_) {}
   return TextMessageUi(
-    text: message.messageText, // ← messageText ki jagah displayText
+    text: displayText,
     isSentByMe: message.sender == 1 ? false : true,
     createdAt: message.createdAt,
     mediaQuery: mediaQuery,
@@ -623,15 +637,24 @@ if (message.messageType == 'text') {
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
-    } else if (message.messageType == 'interactive') {
-      return InteractiveMessageUi(
-        messageText: message.messageText,
+    } else if (message.messageType == 'interactive' &&
+        message.hasCallHistory) {
+      // A voice-call-related "interactive" message (e.g. a call-permission
+      // reply) that also carries callHistory data — show the call log UI
+      // instead of the generic interactive-reply UI. Covers both call
+      // directions (customer calling us, or us calling the customer).
+      return CallMessageUi(
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
+        callDurationSeconds: message.callDurationSeconds,
+        callStatus: message.callStatus,
+        direction: message.direction,
+        callConnectedAt: message.callConnectedAt,
       );
-    } else if (message.messageType == 'buttons') {
+    } else if (message.messageType == 'interactive' ||
+        message.messageType == 'buttons') {
       return TempleteMessageUi(
         templateData: message.templateData,
         messageText: message.messageText,
@@ -715,17 +738,79 @@ if (message.messageType == 'text') {
       // totally blank bubble. Fall back to showing the raw text/body
       // instead of dropping the content silently.
       String displayText = message.messageText;
+      String? interactiveReplyTitle;
+      String? contextId;
       try {
         final decoded = jsonDecode(message.messageText);
         if (decoded is Map) {
+          final interactive = decoded['interactive'];
+          final replyTitle = interactive is Map
+              ? (interactive['list_reply']?['title']?.toString() ??
+                  interactive['button_reply']?['title']?.toString() ??
+                  interactive['nfm_reply']?['name']?.toString())
+              : null;
           final body = decoded['text']?['body']?.toString() ??
               decoded['body']?.toString() ??
-              decoded['caption']?.toString();
+              decoded['caption']?.toString() ??
+              replyTitle;
           if (body != null && body.isNotEmpty) displayText = body;
+          if (replyTitle != null && replyTitle.isNotEmpty) {
+            interactiveReplyTitle = replyTitle;
+            contextId = decoded['context']?['id']?.toString();
+          }
         }
       } catch (_) {}
       if (displayText.trim().isEmpty) {
         displayText = '[${message.messageType}]';
+      }
+
+      // A WhatsApp list/button reply — render it like a quoted WhatsApp
+      // reply (a small preview of the message it replied to, followed by
+      // the option the customer picked) instead of plain/raw text.
+      if (interactiveReplyTitle != null) {
+        String? quotedPreview;
+        if (contextId != null && contextId.isNotEmpty) {
+          final chatList = Get.find<MessagesPageController>().messageChatList;
+          final originalIndex =
+              chatList.indexWhere((m) => m.messageId == contextId);
+          if (originalIndex != -1) {
+            quotedPreview = _previewTextFor(chatList[originalIndex]);
+          }
+        }
+        return BaseMessageUi(
+          isSentByMe: message.sender == 1 ? false : true,
+          createdAt: message.createdAt,
+          mediaQuery: mediaQuery,
+          deliveryStatus: message.deliveryStatus ?? "sent",
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (quotedPreview != null && quotedPreview.isNotEmpty)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                    border: const Border(
+                      left: BorderSide(color: Colors.green, width: 4.0),
+                    ),
+                  ),
+                  child: Text(
+                    quotedPreview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                ),
+              SelectableText(
+                interactiveReplyTitle,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        );
       }
 
       return BaseMessageUi(
@@ -742,6 +827,22 @@ if (message.messageType == 'text') {
         ),
       );
     }
+  }
+
+  // Best-effort short preview of an arbitrary earlier message, used to show
+  // "replied to" context above a WhatsApp list/button reply.
+  String _previewTextFor(Message m) {
+    String text = m.messageText;
+    try {
+      final decoded = jsonDecode(m.messageText);
+      if (decoded is Map) {
+        final body = decoded['text']?['body']?.toString() ??
+            decoded['body']?.toString() ??
+            decoded['caption']?.toString();
+        if (body != null && body.isNotEmpty) text = body;
+      }
+    } catch (_) {}
+    return text;
   }
 
   bool isJson(String str) {
@@ -990,37 +1091,51 @@ Widget _buildInputField(
             constraints: BoxConstraints(
               maxHeight: mediaQuery.height * 0.15,
             ),
-            child: TextField(
-              controller: messagesPageController.textEditingController,
-              keyboardType: TextInputType.multiline,
-              maxLines: 5,
-              minLines: 1,
-              enableInteractiveSelection: true,
-              selectionControls: MaterialTextSelectionControls(),
-              toolbarOptions: const ToolbarOptions(
-                copy: true,
-                paste: true,
-                cut: true,
-                selectAll: true,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Type a message here....',
-                hintStyle: const TextStyle(color: AppTheme.black54),
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20.0),
-                  borderSide: const BorderSide(color: AppTheme.greyColor),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(7.0),
-                  borderSide: const BorderSide(color: AppTheme.greyColor),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(20.0),
-                  borderSide: BorderSide(color: AppTheme.boarderColor),
-                ),
-              ),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: messagesPageController.textEditingController,
+              builder: (context, value, child) {
+                return TextField(
+                  controller: messagesPageController.textEditingController,
+                  keyboardType: TextInputType.multiline,
+                  maxLines: 5,
+                  minLines: 1,
+                  enableInteractiveSelection: true,
+                  selectionControls: MaterialTextSelectionControls(),
+                  toolbarOptions: const ToolbarOptions(
+                    copy: true,
+                    paste: true,
+                    cut: true,
+                    selectAll: true,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Type a message here....',
+                    hintStyle: const TextStyle(color: AppTheme.black54),
+                    filled: true,
+                    fillColor: Colors.white,
+                    suffixIcon: value.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close,
+                                color: AppTheme.black54, size: 20),
+                            onPressed: () =>
+                                messagesPageController.textEditingController
+                                    .clear(),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20.0),
+                      borderSide: const BorderSide(color: AppTheme.greyColor),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(7.0),
+                      borderSide: const BorderSide(color: AppTheme.greyColor),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20.0),
+                      borderSide: BorderSide(color: AppTheme.boarderColor),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),

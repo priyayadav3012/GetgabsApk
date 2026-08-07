@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/auth/login_with_email/login_with_email_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
+import 'package:getgabs/ui/res/widgets/skeleton_loaders.dart';
 import 'package:getgabs/ui/themes/themes.dart';
 
 class ActiveChats extends StatelessWidget {
@@ -10,17 +11,15 @@ class ActiveChats extends StatelessWidget {
 
   final DashboardController dashboardController =
       Get.find<DashboardController>();
-bool get _isMessagedly => LoginWithEmailController.currentFlavor == 'messagedly';
-bool get _isScalewiz => LoginWithEmailController.currentFlavor == 'scalewiz';
+bool get _isMessagedly => LoginWithEmailController.currentFlavorNormalized == 'messagedly';
+bool get _isScalewiz => LoginWithEmailController.currentFlavorNormalized == 'scalewiz';
   @override
   Widget build(BuildContext context) {
     return Obx(() {
 
       /// ✅ Show loader ONLY when loading AND list is empty
       if (dashboardController.isActiveApiInCall.value) {
-        return const Center(
-          child: CircularProgressIndicator(),
-        );
+        return const ChatListSkeleton();
       }
 
       /// ✅ Main content

@@ -16,12 +16,17 @@ import WebRTC
     private var answeredCallUUIDs: Set<UUID> = []
 
     override init() {
-        let config = CXProviderConfiguration(localizedName: "GetGabs")
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        let isMessagedly = bundleIdentifier.lowercased().contains("messagedly")
+        let config = CXProviderConfiguration(localizedName: isMessagedly ? "Messagedly" : "GetGabs")
         config.supportsVideo = false
         config.maximumCallGroups = 1
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
-        config.includesCallsInRecents = false
+        // true → CallKit writes answered/missed VoIP calls into the iPhone's
+        // native Recents (Phone app call history). Was false, which suppressed
+        // them entirely.
+        config.includesCallsInRecents = true
         // nil = use iOS system default ringtone.
         // "ringtone.caf" was set here but the file was never added to the Xcode
         // bundle, causing CallKit to show an incoming call UI with no audio.
@@ -29,7 +34,8 @@ import WebRTC
         // Copy Bundle Resources phase and restore: config.ringtoneSound = "ringtone.caf"
         config.ringtoneSound = nil
 
-        if let image = UIImage(named: "IconMask") {
+        let iconAssetName = Self.assetName(forBaseName: "IconMask")
+        if let image = UIImage(named: iconAssetName) {
             config.iconTemplateImageData = image.pngData()
         }
 
@@ -46,6 +52,12 @@ import WebRTC
         rtcAudioSession.useManualAudio = true
         rtcAudioSession.isAudioEnabled = false
         configureWebRTCAudio()
+    }
+
+    private static func assetName(forBaseName baseName: String) -> String {
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+        let isMessagedly = bundleIdentifier.lowercased().contains("messagedly")
+        return isMessagedly ? "\(baseName)-Messagedly" : baseName
     }
 
     // MARK: - INCOMING CALL
