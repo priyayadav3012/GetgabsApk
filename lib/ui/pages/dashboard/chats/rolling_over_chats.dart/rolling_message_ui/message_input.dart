@@ -205,7 +205,20 @@ class MessageRollingPage extends StatelessWidget {
                           ),
                         ),
                         ...messages.map((message) {
-                          return buildMessageWidget(message, mediaQuery, rollingOverChatModel);
+                          final controller = Get.find<MessagesPageController>();
+                          return Obx(() {
+                            final isHighlighted =
+                                controller.highlightedMessageId.value ==
+                                    message.messageId;
+                            return Container(
+                              key: controller.keyForMessage(message.messageId),
+                              color: isHighlighted
+                                  ? const Color(0xFFD3E3FD)
+                                  : Colors.transparent,
+                              child: buildMessageWidget(
+                                  message, mediaQuery, rollingOverChatModel),
+                            );
+                          });
                         }),
                       ],
                     );
@@ -357,14 +370,62 @@ class MessageRollingPage extends StatelessWidget {
       var isInJson = isJson(message.messageText);
       if (isInJson) {
         final messageData = jsonDecode(message.messageText);
-        var replyText = messageData['text']?['body'] ?? "No reply text";
+        // The app's own replies carry text.body; a reply sent from the web
+        // app instead carries a flat {content_send_type, msgcontent,
+        // message_id} shape with the reply text under msgcontent and no
+        // replyformsg (no quoted-message data) — fall back to that instead
+        // of showing "No reply text" for every web-originated reply.
+        var replyText = messageData['text']?['body'] ??
+            messageData['msgcontent'] ??
+            "No reply text";
+
+        // replyformsg (the quoted-preview snapshot) only exists on the
+        // LOCAL optimistic message right after sending — a reload from
+        // history doesn't carry it back (the server's reply_to block isn't
+        // in the fetchcustomerchat list response, only in sendReplyChat's
+        // own immediate response). Fall back to looking the original
+        // message up by id in the currently-loaded chat, so the quoted box
+        // still shows after leaving and reopening the chat.
+        String replyFormData = message.replyformsg ?? '';
+        final quotedMessageId = messageData['message_id']?.toString();
+        final controller = Get.find<MessagesPageController>();
+        if (replyFormData.isEmpty) {
+          if (quotedMessageId != null && quotedMessageId.isNotEmpty) {
+            final chatList = controller.messageChatList;
+            final index =
+                chatList.indexWhere((m) => m.messageId == quotedMessageId);
+            if (index != -1) {
+              final quoted = chatList[index];
+              replyFormData = jsonEncode({
+                'message_id': quoted.messageId,
+                'message_type': quoted.messageType,
+                'message_text': quoted.messageText,
+                'template_data': quoted.templateData,
+                'local': quoted.local,
+                'quoted_sender_name': controller.resolveQuotedSenderName(quoted),
+              });
+            } else {
+              // Not in the currently-loaded pages (common for notes/early
+              // templates, which tend to be older) — quietly load a few
+              // more pages in the background; once found, the reactive
+              // rebuild picks it up without the user needing to scroll.
+              controller.ensureMessageLoaded(quotedMessageId);
+            }
+          }
+        }
+
         return ReplyMessageUi(
           replyText: replyText,
           isSentByMe: message.sender == 1 ? false : true,
           createdAt: message.createdAt,
           mediaQuery: mediaQuery,
           deliveryStatus: message.deliveryStatus ?? "sent",
-          replyFormData: message.replyformsg!,
+          replyFormData: replyFormData,
+          onTapQuoted: (id) => controller.scrollToMessage(id),
+          unresolvedQuotedMessageId:
+              replyFormData.isEmpty ? quotedMessageId : null,
+          onRetryLoadQuoted: (id) =>
+              controller.ensureMessageLoaded(id, forceRetry: true),
         );
       } else {
         /*  final mess =

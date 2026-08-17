@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
 import '../base_message_ui.dart';
 
-class TempleteMessageUi extends StatelessWidget {
+class TempleteMessageUi extends StatefulWidget {
   final String? templateData;
   final String messageText;
   final bool isSentByMe;
@@ -14,7 +14,8 @@ class TempleteMessageUi extends StatelessWidget {
   final String deliveryStatus;
   final String messageType;
    final String? senderName;
- 
+  final bool isAutoreply;
+
   const TempleteMessageUi({
     super.key,
     required this.templateData,
@@ -23,11 +24,31 @@ class TempleteMessageUi extends StatelessWidget {
     required this.createdAt,
     required this.mediaQuery,
     required this.deliveryStatus,
-    required this.messageType, 
+    required this.messageType,
     required this.senderName,
+    this.isAutoreply = false,
   });
-  
 
+  @override
+  State<TempleteMessageUi> createState() => _TempleteMessageUiState();
+}
+
+class _TempleteMessageUiState extends State<TempleteMessageUi> {
+  // Received templates start collapsed (short preview, tap to reveal the
+  // full message) — sent-by-me templates are never collapsed. Once
+  // expanded it stays expanded; there's no need to re-collapse.
+  bool _expanded = false;
+  bool _flashHighlight = false;
+
+  void _expand() {
+    setState(() {
+      _expanded = true;
+      _flashHighlight = true;
+    });
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _flashHighlight = false);
+    });
+  }
 
   String replaceTemplateVariables(String text, List<dynamic> parameters) {
     for (var i = 0; i < parameters.length; i++) {
@@ -86,6 +107,37 @@ class TempleteMessageUi extends StatelessWidget {
   }
 
   bool isJson(String str) => decodeJsonPayload(str) != null;
+
+  static final RegExp _markdownMarker = RegExp(r'\*(.+?)\*|_(.+?)_');
+
+  // WhatsApp-style markdown — *bold* and _italic_ — arrives as literal
+  // asterisks/underscores in plain-text bot messages (they're not real
+  // WhatsApp interactive JSON), so it needs parsing here instead of just
+  // being shown raw.
+  List<InlineSpan> _parseWhatsAppMarkdown(String text, TextStyle baseStyle) {
+    final spans = <InlineSpan>[];
+    var lastEnd = 0;
+    for (final match in _markdownMarker.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(
+            text: text.substring(lastEnd, match.start), style: baseStyle));
+      }
+      if (match.group(1) != null) {
+        spans.add(TextSpan(
+            text: match.group(1),
+            style: baseStyle.copyWith(fontWeight: FontWeight.bold)));
+      } else if (match.group(2) != null) {
+        spans.add(TextSpan(
+            text: match.group(2),
+            style: baseStyle.copyWith(fontStyle: FontStyle.italic)));
+      }
+      lastEnd = match.end;
+    }
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd), style: baseStyle));
+    }
+    return spans;
+  }
 
   static final RegExp _inlineButtonMarker =
       RegExp(r'\((List )?Button:\s*([^)]+)\)');
@@ -148,11 +200,9 @@ class TempleteMessageUi extends StatelessWidget {
     List<Map<String, String>> buttonsList = [];
     Map<String, dynamic> interactiveMessage = {};
 
-//  print("33333333333333333333333333");
-
     try {
-      if (templateData != null && templateData!.isNotEmpty) {
-        final decodedTemplate = decodeJsonPayload(templateData!);
+      if (widget.templateData != null && widget.templateData!.isNotEmpty) {
+        final decodedTemplate = decodeJsonPayload(widget.templateData!);
         if (decodedTemplate is Map<String, dynamic> &&
             decodedTemplate.containsKey('data')) {
           final data = decodedTemplate['data'];
@@ -201,8 +251,8 @@ class TempleteMessageUi extends StatelessWidget {
         }
       }
 
-      if (messageText.isNotEmpty) {
-        final dynamic rawMessageData = decodeJsonPayload(messageText);
+      if (widget.messageText.isNotEmpty) {
+        final dynamic rawMessageData = decodeJsonPayload(widget.messageText);
         if (rawMessageData is Map<String, dynamic>) {
           if (rawMessageData.containsKey('template') &&
               rawMessageData['template'] is Map<String, dynamic> &&
@@ -254,7 +304,7 @@ class TempleteMessageUi extends StatelessWidget {
         }
       }
     } catch (e) {
-      print('Error parsing template data: $e');
+      debugPrint('Error parsing template data: $e');
     }
 
     return {
@@ -267,112 +317,182 @@ class TempleteMessageUi extends StatelessWidget {
       'interactiveMessage': interactiveMessage
     };
   }
-String formatMessageText(String messageText) {
-  if (messageText.isEmpty) return '';
 
-  final decoded = decodeJsonPayload(messageText);
-  if (decoded == null) {
-    return replaceDynamicVariables(
-      messageText,
-      {"name": senderName ?? ''},
-    );
-  }
+  String formatMessageText(String messageText) {
+    if (messageText.isEmpty) return '';
 
-  if (decoded is String) {
-    return replaceDynamicVariables(
-      decoded,
-      {"name": senderName ?? ''},
-    );
-  }
-
-  if (decoded is Map<String, dynamic>) {
-    if (decoded.containsKey('text') && decoded['text'] is Map) {
-      return decoded['text']['body']?.toString() ?? '';
+    final decoded = decodeJsonPayload(messageText);
+    if (decoded == null) {
+      return replaceDynamicVariables(
+        messageText,
+        {"name": widget.senderName ?? ''},
+      );
     }
 
-    if (decoded.containsKey('interactive')) {
-      final dynamic interactive = decoded['interactive'];
-      if (interactive is Map<String, dynamic>) {
-        return getInteractivePreview(interactive);
+    if (decoded is String) {
+      return replaceDynamicVariables(
+        decoded,
+        {"name": widget.senderName ?? ''},
+      );
+    }
+
+    if (decoded is Map<String, dynamic>) {
+      if (decoded.containsKey('text') && decoded['text'] is Map) {
+        return decoded['text']['body']?.toString() ?? '';
       }
-      return '';
-    }
 
-    if (decoded.containsKey('template')) {
-      final dynamic template = decoded['template'];
-      if (template is Map && template.containsKey('components')) {
+      if (decoded.containsKey('interactive')) {
+        final dynamic interactive = decoded['interactive'];
+        if (interactive is Map<String, dynamic>) {
+          return getInteractivePreview(interactive);
+        }
         return '';
       }
+
+      if (decoded.containsKey('template')) {
+        final dynamic template = decoded['template'];
+        if (template is Map && template.containsKey('components')) {
+          return '';
+        }
+      }
     }
+
+    return '';
   }
-
-  return '';
-}
-//   String formatMessageText(String messageText) {
-//     if (messageText.isEmpty) {
-//       return '';
-//     }
-
-//   if (!isJson(messageText)) {
-//     return replaceDynamicVariables(messageText, {
-//       "name":"priya" // 🔥 Replace with dynamic user data
-//     });
-//   }
-
-//     try {
-//       final Map<String, dynamic> parsedJson = jsonDecode(messageText); 
-//       if(parsedJson.containsKey('type')){
-//       return parsedJson['type'].toString();
-
-//       }else{
-//         return '';
-//       }
-// //       final Map<String, dynamic> parsedJson = jsonDecode(messageText);
-// //       String to = parsedJson['to']?.toString() ?? '';
-// //       String body = parsedJson['text']?['body'] ?? '';
-// //       bool previewUrl = parsedJson['text']?['preview_url'] ?? false;
-// // // if(messageTextData.containsKey('template'))
-// //       return ' $body';
-//     } catch (e) {
-//       print('Error parsing messageText: $e');
-//       return '';
-//     }
-//   }
 
   @override
   Widget build(BuildContext context) {
-    // if (messageType == "template") {
     final parsedData = parseTemplateData();
-    final inline = extractInlineButtons(formatMessageText(messageText));
+    final inline = extractInlineButtons(formatMessageText(widget.messageText));
     final formattedText = inline['text'] as String;
     final inlineButtons = inline['buttons'] as List<Map<String, String>>;
-    return BaseMessageUi(
-      isSentByMe: isSentByMe,
-      createdAt: createdAt,
-      mediaQuery: mediaQuery,
-      deliveryStatus: deliveryStatus,
-      child: Column(
+
+    final headerText = parsedData['header'] as String;
+    final bodyText = parsedData['body'] as String;
+    final footerText = parsedData['footer'] as String;
+    final imageUrl = parsedData['image'] as String;
+    final videoUrl = parsedData['video'] as String;
+    final buttonsList = parsedData['buttons'] as List<Map<String, String>>;
+    final interactiveMessage =
+        parsedData['interactiveMessage'] as Map<String, dynamic>;
+
+    // A received template only collapses when there's actually meaningful
+    // extra content to hide behind a tap (media/buttons/footer/interactive,
+    // or a long enough body) — a short one-line template has nothing worth
+    // condensing. Sent-by-me templates are never collapsed.
+    final previewLength = headerText.length + bodyText.length + formattedText.length;
+    final hasExtras = footerText.isNotEmpty ||
+        buttonsList.isNotEmpty ||
+        interactiveMessage.isNotEmpty ||
+        inlineButtons.isNotEmpty ||
+        imageUrl.isNotEmpty ||
+        videoUrl.isNotEmpty ||
+        previewLength > 140;
+    final canCollapse = !widget.isSentByMe && hasExtras;
+    final collapsed = canCollapse && !_expanded;
+
+    Widget content;
+    if (collapsed) {
+      final previewSpans = <InlineSpan>[];
+      if (headerText.isNotEmpty) {
+        previewSpans.addAll(_parseWhatsAppMarkdown(
+          headerText,
+          const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+        ));
+        previewSpans.add(const TextSpan(text: '  '));
+      }
+      final restText =
+          [bodyText, formattedText].where((t) => t.isNotEmpty).join('\n');
+      if (restText.isNotEmpty) {
+        previewSpans.addAll(_parseWhatsAppMarkdown(
+          restText,
+          const TextStyle(color: Colors.black87),
+        ));
+      }
+
+      content = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          if (parsedData['video'] != null && parsedData['video']!.isNotEmpty)
+          if (widget.isAutoreply)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 6.0),
+              child: Text(
+                'AI Agent',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.3,
+                  color: Color(0xFFD32F2F),
+                ),
+              ),
+            ),
+          if (previewSpans.isNotEmpty)
+            Text.rich(
+              TextSpan(children: previewSpans),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.unfold_more, size: 14, color: Colors.grey.shade600),
+              const SizedBox(width: 4),
+              Text(
+                'Tap to view full message',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+      content = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _expand,
+        child: content,
+      );
+    } else {
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.isAutoreply)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 6.0),
+              child: Text(
+                'AI Agent',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.3,
+                  color: Color(0xFFD32F2F),
+                ),
+              ),
+            ),
+          if (videoUrl.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
               child: VideoMessageUi(
-                videoUrl: parsedData['video']!,
-                isSentByMe: isSentByMe,
-                createdAt: createdAt,
-                mediaQuery: mediaQuery,
+                videoUrl: videoUrl,
+                isSentByMe: widget.isSentByMe,
+                createdAt: widget.createdAt,
+                mediaQuery: widget.mediaQuery,
                 rightMargin: 0.0,
                 leftMargin: 0.0,
                 isInTemplate: true,
-                deliveryStatus: deliveryStatus,
+                deliveryStatus: widget.deliveryStatus,
               ),
             ),
-          if (parsedData['image'] != null && parsedData['image']!.isNotEmpty)
+          if (imageUrl.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
               child: Image.network(
-                parsedData['image']!,
+                imageUrl,
                 errorBuilder: (context, error, stackTrace) => Container(
                   height: 150,
                   width: double.infinity,
@@ -390,40 +510,51 @@ String formatMessageText(String messageText) {
                 },
               ),
             ),
-          if (parsedData['header'] != null && parsedData['header']!.isNotEmpty)
+          if (headerText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
-              child: SelectableText(
-                parsedData['header']!,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+              child: SelectableText.rich(
+                TextSpan(
+                  children: _parseWhatsAppMarkdown(
+                    headerText,
+                    const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
                 ),
               ),
             ),
-          if (parsedData['body'] != null && parsedData['body']!.isNotEmpty)
+          if (bodyText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
-              child: SelectableText(
-                parsedData['body']!,
-                style: const TextStyle(color: Colors.black87),
+              child: SelectableText.rich(
+                TextSpan(
+                  children: _parseWhatsAppMarkdown(
+                    bodyText,
+                    const TextStyle(color: Colors.black87),
+                  ),
+                ),
               ),
             ),
           if (formattedText.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
-              child: SelectableText(
-                formattedText,
-                style: const TextStyle(color: Colors.black87),
+              child: SelectableText.rich(
+                TextSpan(
+                  children: _parseWhatsAppMarkdown(
+                    formattedText,
+                    const TextStyle(color: Colors.black87),
+                  ),
+                ),
               ),
             ),
-          if (parsedData['footer'] != null && parsedData['footer']!.isNotEmpty)
+          if (footerText.isNotEmpty)
             SelectableText(
-              parsedData['footer']!,
+              footerText,
               style: const TextStyle(color: Colors.black54),
             ),
-          if (parsedData['buttons'] != null &&
-              parsedData['buttons']!.isNotEmpty)
+          if (buttonsList.isNotEmpty)
             Column(
               children: [
                 const Divider(
@@ -431,7 +562,7 @@ String formatMessageText(String messageText) {
                   thickness: 1,
                   color: Colors.grey,
                 ),
-                for (var q in parsedData['buttons'])
+                for (var q in buttonsList)
                   TextButton(
                     onPressed: () {},
                     child: Row(
@@ -450,9 +581,8 @@ String formatMessageText(String messageText) {
                 ),
               ],
             ),
-          if (parsedData['interactiveMessage'] != null &&
-              parsedData['interactiveMessage']!.isNotEmpty)
-            buildInteractiveContent(parsedData['interactiveMessage']),
+          if (interactiveMessage.isNotEmpty)
+            buildInteractiveContent(interactiveMessage),
           if (inlineButtons.isNotEmpty)
             Column(
               children: [
@@ -477,6 +607,24 @@ String formatMessageText(String messageText) {
               ],
             ),
         ],
+      );
+    }
+
+    return BaseMessageUi(
+      isSentByMe: widget.isSentByMe,
+      createdAt: widget.createdAt,
+      mediaQuery: widget.mediaQuery,
+      deliveryStatus: widget.deliveryStatus,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        color: _flashHighlight
+            ? const Color(0xFFD3E3FD)
+            : Colors.transparent,
+        child: AnimatedSize(
+          duration: const Duration(milliseconds: 250),
+          alignment: Alignment.topLeft,
+          child: content,
+        ),
       ),
     );
   }
@@ -501,10 +649,7 @@ String formatMessageText(String messageText) {
                 style: TextStyle(fontWeight: FontWeight.bold)),
             SelectableText("📎 ${document["filename"]}"),
             TextButton(
-              onPressed: () async {
-//          openDocumentLink(document["link"],document["link"]);
-// print(document["link"]);
-              },
+              onPressed: () async {},
               child: SelectableText("🔗  Document",
                   style: TextStyle(color: Colors.blue)),
             ),
@@ -536,23 +681,15 @@ String formatMessageText(String messageText) {
           padding: const EdgeInsets.only(bottom: 8.0),
           child: VideoMessageUi(
             videoUrl: header["video"]["link"]!,
-            isSentByMe: isSentByMe,
-            createdAt: createdAt,
-            mediaQuery: mediaQuery,
+            isSentByMe: widget.isSentByMe,
+            createdAt: widget.createdAt,
+            mediaQuery: widget.mediaQuery,
             rightMargin: 0.0,
             leftMargin: 0.0,
             isInTemplate: true,
-            deliveryStatus: deliveryStatus,
+            deliveryStatus: widget.deliveryStatus,
           ),
         ));
-//       children.add(TextButton(
-//         onPressed: () {
-//           openDocumentLink(header["video"]["link"]);
-// print(header["video"]["link"]);
-//          // launchUrl(Uri.parse(header["video"]["link"]));
-//         },
-//         child: SelectableText("🔗 Watch Video", style: TextStyle(color: Colors.blue)),
-//       ));
       }
     }
 
@@ -629,18 +766,9 @@ String formatMessageText(String messageText) {
 
     // Handle Flow Messages
     if (interactive.containsKey("flow")) {
-      children.add(Column(
+      children.add(const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // SelectableText("Flow Interactive Message",
-          //     style: TextStyle(fontWeight: FontWeight.bold)),
-          // SelectableText("Flow ID: ${flowData['parameters']['flow_id']??""}"),
-          // SelectableText("CTA: ${flowData['parameters']['flow_cta']??""}"),
-          // SelectableText("Action: ${flowData['parameters']['flow_action'??""]}"),
-          // SelectableText("Action: ${flowData['parameters']['display_text']??""}"),
-          // SelectableText(
-          //     "Payload: ${jsonEncode(flowData['parameters']['flow_action_payload'])}"),
-        ],
+        children: [],
       ));
     }
     if (interactive.containsKey("action") &&
@@ -650,13 +778,7 @@ String formatMessageText(String messageText) {
 
       children.add(
         GestureDetector(
-          onTap: () async {
-            // if (await canLaunchUrl(Uri.parse(url))) {
-            //   await launchUrl(Uri.parse(url));
-            // } else {
-            //   print("Could not launch $url");
-            // }
-          },
+          onTap: () async {},
           child: TextButton(
             onPressed: () {},
             child: Row(
@@ -673,7 +795,6 @@ String formatMessageText(String messageText) {
     }
     // Handle NFM Replies
     if (interactive.containsKey("nfm_reply")) {
-      // response_json available, but we don't need to use it here
       children.add(SelectableText('Form Sent',
         style: TextStyle(fontWeight: FontWeight.bold)));
     }
@@ -712,177 +833,4 @@ String formatMessageText(String messageText) {
       children: children,
     );
   }
-
-// Future<void> openDocumentLink(String url) async {
-// Future<void> openDocumentLink(String url, String fileName) async {
-//   try {
-//     // Get the directory to save the file
-//     Directory directory = await getApplicationDocumentsDirectory();
-//     String filePath = "${directory.path}/$fileName";
-
-//     // Start the download
-//     Dio dio = Dio();
-//     await dio.download(url, filePath);
-
-//     // Show success message
-//     Get.snackbar(
-//       "Success",
-//       "File downloaded successfully!\nSaved at: $filePath",
-//       snackPosition: SnackPosition.BOTTOM,
-//       backgroundColor: Colors.green,
-//       colorText: Colors.white,
-//     );
-
-//     debugPrint("File saved at: $filePath");
-//   } catch (e) {
-//     // Show error message
-//     Get.snackbar(
-//       "Error",
-//       "Download failed: $e",
-//       snackPosition: SnackPosition.BOTTOM,
-//       backgroundColor: Colors.red,
-//       colorText: Colors.white,
-//     );
-
-//     debugPrint("Download error: $e");
-//   }
-// }
-// }
 }
-
-    // else if (messageType == "interactive") {
-    //   // Handle interactive message logic here
-    //   return BaseMessageUi(
-    //     isSentByMe: isSentByMe,
-    //     createdAt: createdAt,
-    //     mediaQuery: mediaQuery,
-    //     deliveryStatus: deliveryStatus,
-    //     child: Column(
-    //       crossAxisAlignment: CrossAxisAlignment.start,
-    //       children: [
-    //         Text("Interactive Message Type Detected",
-    //             style: TextStyle(fontWeight: FontWeight.bold)),
-    //         SelectableText(messageText),
-    //         // Add other UI elements based on interactive message structure
-    //       ],
-    //     ),
-    //   );
-    // }
-  
-//    ; } else if (messageType == "interactive") {
-//       try {
-        // final Map<String, dynamic> interactiveData = jsonDecode(messageText);
-        // final Map<String, dynamic>? interactive =
-        //     interactiveData['interactive'];
-
-//         if (interactive != null) {
-//           String type = interactive['type'] ?? 'unknown';
-
-//           Widget content;
-
-//           switch (type) {
-//             case "button_reply":
-//               content = Column(
-//                 crossAxisAlignment: CrossAxisAlignment.start,
-//                 children: [
-//                   // Text("Button Reply",
-//                   //     style: TextStyle(fontWeight: FontWeight.bold)),
-//                   // Text("Button ID: ${interactive['button_reply']['id']}"),
-//                   Text(" ${interactive['button_reply']['title']}"),
-//                 ],
-//               );
-//               break;
-
-//             case "flow":
-//               final flowData = interactive['action'] ?? {};
-//               content = Column(
-//                 crossAxisAlignment: CrossAxisAlignment.start,
-//                 children: [
-//                   Text("Flow Interactive Message",
-//                       style: TextStyle(fontWeight: FontWeight.bold)),
-//                   Text("Flow ID: ${flowData['parameters']['flow_id']}"),
-//                   Text("CTA: ${flowData['parameters']['flow_cta']}"),
-//                   Text("Action: ${flowData['parameters']['flow_action']}"),
-//                   Text(
-//                       "Payload: ${jsonEncode(flowData['parameters']['flow_action_payload'])}"),
-//                 ],
-//               );
-//               break;
-
-//             case "nfm_reply":
-//               final nfmResponse =
-//                   jsonDecode(interactive['nfm_reply']['response_json'] ?? "{}");
-//               content = Column(
-//                 crossAxisAlignment: CrossAxisAlignment.start,
-//                 children: [
-//                   Text('Sent', style: TextStyle(fontWeight: FontWeight.bold))
-
-//                   // Text("NFM Reply Received",
-//                   //     style: TextStyle(fontWeight: FontWeight.bold)),
-//                   // Text("Response: ${jsonEncode(nfmResponse)}"),
-//                   // Text("Body: ${interactive['nfm_reply']['body']}"),
-//                 ],
-//               );
-//               break;
-//             case "list_reply":
-//               final listReply = interactive['list_reply'] ?? {};
-//               // var listReply = messageData["interactive"]["list_reply"][""];
-//               String title = listReply["title"] ?? "No Title";
-//               String description = listReply["description"] ?? "No Description";
-//               print(listReply.toString());
-//               content = Column(
-//                 crossAxisAlignment: CrossAxisAlignment.start,
-//                 children: [
-// // Text("nfmResponse")
-//                   ListTile(
-//                     title: Text(title,
-//                         style: TextStyle(
-//                             fontSize: 18, fontWeight: FontWeight.bold)),
-//                     subtitle: Text(description,
-//                         style: TextStyle(fontSize: 14, color: Colors.grey)),
-//                     tileColor: Colors.white,
-//                     shape: RoundedRectangleBorder(
-//                         borderRadius: BorderRadius.circular(8)),
-//                     contentPadding: EdgeInsets.all(10),
-//                   )
-//                 ],
-//               );
-//               break;
-
-//             default:
-//               content = Text("Unknown Interactive Message Type: $type");
-//           }
-
-//           return BaseMessageUi(
-//             isSentByMe: isSentByMe,
-//             createdAt: createdAt,
-//             mediaQuery: mediaQuery,
-//             deliveryStatus: deliveryStatus,
-//             child: content,
-//           );
-//         }
-//       } catch (e) {
-//         print("Error parsing interactive message: $e");
-//       }
-
-//       return BaseMessageUi(
-//         isSentByMe: isSentByMe,
-//         createdAt: createdAt,
-//         mediaQuery: mediaQuery,
-//         deliveryStatus: deliveryStatus,
-//         child: SelectableText("Invalid interactive message format"),
-//       );
-//     }
-
-    // else {
-    //   // Default case
-    //   return BaseMessageUi(
-    //     isSentByMe: isSentByMe,
-    //     createdAt: createdAt,
-    //     mediaQuery: mediaQuery,
-    //     deliveryStatus: deliveryStatus,
-    //     child: SelectableText("Unknown message type"),
-    //   );
-    // }
-
-

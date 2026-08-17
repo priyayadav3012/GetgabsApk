@@ -58,6 +58,7 @@ class _ChatEndPoints {
   final String shortMessageList = "shortmessagelist";
   final String sendShortMessage = "send-message";
   final String voiceCallLogs = "voiceCallLogs";
+  final String sendReplyChat = "sendReplyChat";
 }
 
 class _MoreScreenEndPoints {

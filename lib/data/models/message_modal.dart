@@ -88,6 +88,62 @@ class Message {
   return messageText;
 }
 
+  // A short, human-readable one-liner for THIS message regardless of its
+  // wire format — used for reply-quote previews (the "Replying to" bar,
+  // and the quoted box inside a sent reply) so no message type ever shows
+  // raw JSON there. displayText only unwraps the 'text' case; this covers
+  // every type buildMessageWidget knows how to render.
+  String get previewText {
+    try {
+      switch (messageType) {
+        case 'text':
+          final decoded = jsonDecode(messageText);
+          final body = decoded['text']?['body']?.toString();
+          return (body != null && body.isNotEmpty) ? body : messageText;
+        case 'reply_msg':
+          final decoded = jsonDecode(messageText);
+          return decoded['msgcontent']?.toString() ??
+              decoded['text']?['body']?.toString() ??
+              'Reply';
+        case 'template':
+          // A quoted template preview is just the generic label, always —
+          // no attempt to extract real body text (a real WhatsApp
+          // template's body is spread across messageText/templateData in
+          // several possible shapes, extracting it reliably in a one-line
+          // preview isn't worth the fragility it introduced).
+          return '📄 Template';
+        case 'interactive':
+        case 'buttons':
+          final decoded = jsonDecode(messageText);
+          final direct = decoded['text']?['body']?.toString() ??
+              decoded['interactive']?['body']?['text']?.toString() ??
+              decoded['body']?['text']?.toString();
+          return (direct != null && direct.isNotEmpty)
+              ? direct
+              : (captionText?.isNotEmpty ?? false ? captionText! : messageType);
+        case 'image':
+          return '📷 Photo';
+        case 'video':
+          return '🎥 Video';
+        case 'audio':
+          return '🎤 Audio';
+        case 'document':
+          return '📄 Document';
+        case 'location':
+          return '📍 Location';
+        case 'contacts':
+          return '👤 Contact';
+        default:
+          return messageText;
+      }
+    } catch (_) {
+      // Failed to parse as JSON — either genuinely plain text (fine, show
+      // as-is) or malformed JSON for a structured type (show the type
+      // label instead of dumping raw braces on screen).
+      return messageText.trimLeft().startsWith('{') ? messageType : messageText;
+    }
+  }
+
   Message copyWith({
     int? id,
     String? messageText,
@@ -105,6 +161,7 @@ class Message {
     bool? local,
     String? deliveryStatus,
     String? replyformsg,
+    int? subuserSenderId,
 
     // ✅ Voice Call
     int? callDurationSeconds,
@@ -138,6 +195,7 @@ class Message {
       local: local ?? this.local,
       deliveryStatus: deliveryStatus ?? this.deliveryStatus,
       replyformsg: replyformsg ?? this.replyformsg,
+      subuserSenderId: subuserSenderId ?? this.subuserSenderId,
 
       // ✅ Voice Call
       callDurationSeconds:
@@ -172,6 +230,27 @@ class Message {
       callHistory = Map<String, dynamic>.from(rawCallHistory);
     }
 
+    // replyformsg (the quoted-message snapshot ReplyMessageUi renders) is
+    // only ever populated locally, right when WE compose a reply (see
+    // MessagesPageController.sendMessage) — a reload from the server never
+    // sends that field back. The server instead sends a `reply_to` block
+    // with the original message's own content, so a reply_msg message
+    // still shows its quoted preview after leaving and reopening the chat.
+    // `content` there is already a clean human-readable string (not raw
+    // WhatsApp JSON), so it's synthesized here as a plain "text" snapshot —
+    // ReplyMessageUi's 'text' case shows a non-JSON string as-is.
+    String replyformsgValue = json['replyformsg'] ?? "";
+    final replyTo = json['reply_to'];
+    if (replyformsgValue.isEmpty && replyTo is Map) {
+      replyformsgValue = jsonEncode({
+        'message_id': replyTo['message_id']?.toString() ?? '',
+        'message_type': 'text',
+        'message_text': replyTo['content']?.toString() ?? '',
+        'template_data': null,
+        'local': false,
+      });
+    }
+
     return Message(
       id: json['id'] ?? 0,
       // Regular messages use 'message_text'; the Assign/Co-Assign/Team-Assign
@@ -203,7 +282,7 @@ class Message {
             DateTime.now().toIso8601String(),
       ),
 
-      replyformsg: json['replyformsg'] ?? "",
+      replyformsg: replyformsgValue,
 
       // ✅ Voice Call Data — from the nested callHistory JSON, not top-level
       // keys. Works identically regardless of call direction (incoming or

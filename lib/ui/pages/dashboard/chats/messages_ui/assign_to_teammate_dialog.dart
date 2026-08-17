@@ -14,12 +14,14 @@ enum _ChatStatus { open, closed }
 class _AssignOption {
   final int id;
   final String name;
+  final String? username;
   final String? role;
   final String? teamName;
   final int? membersCount;
   const _AssignOption(
     this.id,
     this.name, {
+    this.username,
     this.role,
     this.teamName,
     this.membersCount,
@@ -187,6 +189,7 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
         return _AssignOption(
           int.tryParse(u['id'].toString()) ?? 0,
           u['name']?.toString() ?? '',
+          username: u['username']?.toString(),
           role: u['role']?.toString(),
           teamName: firstTeamName,
         );
@@ -257,6 +260,19 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
     }
   }
 
+  /// The note card's top-right name should reflect WHO THIS SPECIFIC ACTION
+  /// TARGETS (the agent/team just picked in the dropdown) — not whoever's
+  /// currently logged in performing the assign, which is the same person
+  /// every time and was the actual bug (every note showed one repeated name
+  /// no matter which teammate got assigned).
+  String _nameForOption(List<_AssignOption> options, int? id) {
+    if (id == null) return '';
+    for (final o in options) {
+      if (o.id == id) return o.name;
+    }
+    return '';
+  }
+
   bool get _canSubmit {
     if (_isSubmitting) return false;
     if (_mode == _AssignMode.team) return _teamId != null;
@@ -291,19 +307,31 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
   /// the API doc, so the app decides the card's header label (ASSIGNMENT /
   /// CO-ASSIGNMENT / etc.) from which action it just called, not from that field.
   ///
-  /// [createdByFallback] (the current logged-in user's name — they're the
-  /// one who just performed the assign) fills in when the backend's
-  /// note_created_by comes back missing/empty, which is the case here too.
+  /// [targetName] is the note card's top-right name — the agent/team this
+  /// specific action just targeted (resolved via [_nameForOption] from the
+  /// dropdown selection). The backend's own note_created_by is NOT used
+  /// even when present — confirmed via real API responses it comes back
+  /// as a fixed generic value (e.g. "Michael from Getgabs") on every
+  /// assign, unrelated to who was actually assigned.
+  ///
+  /// [content] replaces the backend's own note content for the same reason
+  /// — confirmed via real API responses (assign to id 48402 = "Rajat
+  /// Sharma") that the backend still writes body text like "Assigned to
+  /// getgabs", the account name, not the actual assignee's name, even
+  /// though it assigned the correct id. The id-based assignment itself is
+  /// correct; only the human-readable text fields are wrong.
   void _insertNoteIfPresent(dynamic response,
-      {required String noteType, required String createdByFallback}) {
+      {required String noteType,
+      required String targetName,
+      required String content}) {
     final note = response['note'];
     if (note is Map) {
       try {
-        var message =
-            Message.fromJson(Map<String, dynamic>.from(note)).copyWith(noteType: noteType);
-        if (message.noteCreatedBy == null || message.noteCreatedBy!.isEmpty) {
-          message = message.copyWith(noteCreatedBy: createdByFallback);
-        }
+        final message = Message.fromJson(Map<String, dynamic>.from(note))
+            .copyWith(
+                noteType: noteType,
+                noteCreatedBy: targetName,
+                messageText: content);
         widget.messagesPageController.insertNoteMessage(message);
       } catch (e) {
         debugPrint('⚠️ Could not render assignment note: $e');
@@ -322,7 +350,6 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
       }
 
       final comment = _commentController.text.trim();
-      final username = await _userData.getCurrentUsername();
       final displayName = await _userData.getCurrentDisplayName();
 
       if (_mode == _AssignMode.team) {
@@ -336,8 +363,12 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
             token);
 
         if (response['status'] == true) {
+          final teamName = _nameForOption(_teamOptions, _teamId);
+          final resolvedTeamName = teamName.isNotEmpty ? teamName : displayName;
           _insertNoteIfPresent(response,
-              noteType: 'team_assignment', createdByFallback: displayName);
+              noteType: 'team_assignment',
+              targetName: resolvedTeamName,
+              content: 'Assigned to $resolvedTeamName team');
           Get.back();
           Get.snackbar(
             'Chat Assigned',
@@ -356,11 +387,19 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
       // mutually exclusive) — only call the primary agent-assign if
       // "Assign to" actually has a value.
       if (_assignAgentId == null) {
+        final coAssigneeName = _nameForOption(_agentOptions, _coAssignAgentId);
+        final resolvedCoAssigneeName =
+            coAssigneeName.isNotEmpty ? coAssigneeName : displayName;
         final coAssignResponse = await _callWithRetry(
             (t) => _chatServices.addCoAssignService({
                   'customerKey': widget.customerKey,
                   'coAssignUserIdd': _coAssignAgentId.toString(),
-                  'usernameIs': username,
+                  // The backend just echoes this straight into note.content
+                  // /co_assigned_to.name verbatim — no lookup of its own —
+                  // so this must be the friendly display name, not the raw
+                  // login username, or the note reads "Co-assigned to
+                  // LakshyaF" instead of "Co-assigned to Lakshya".
+                  'usernameIs': resolvedCoAssigneeName,
                   'comment': comment,
                   'token': t,
                 }),
@@ -368,7 +407,9 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
 
         if (coAssignResponse['status'] == true) {
           _insertNoteIfPresent(coAssignResponse,
-              noteType: 'team_co_assignment', createdByFallback: displayName);
+              noteType: 'team_co_assignment',
+              targetName: resolvedCoAssigneeName,
+              content: 'Co-assigned to $resolvedCoAssigneeName');
           Get.back();
           Get.snackbar(
             'Chat Assigned',
@@ -384,11 +425,17 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
       }
 
       // Agent mode — primary assign first, then an optional co-assign.
+      final assigneeName = _nameForOption(_agentOptions, _assignAgentId);
+      final resolvedAssigneeName =
+          assigneeName.isNotEmpty ? assigneeName : displayName;
       final assignResponse = await _callWithRetry(
           (t) => _chatServices.updateLastSummaryAssignService({
                 'customerKey': widget.customerKey,
                 'assigToUserIdd': _assignAgentId.toString(),
-                'usernameIs': username,
+                // See the co-assign call above — the backend echoes this
+                // verbatim into note.content/assigned_to.name, so it must
+                // be the friendly display name, not the raw username.
+                'usernameIs': resolvedAssigneeName,
                 'comment': comment,
                 'windowType': _status == _ChatStatus.open ? 'opened' : 'closed',
                 'token': t,
@@ -400,7 +447,10 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
         return;
       }
       _insertNoteIfPresent(assignResponse,
-          noteType: 'team_assignment', createdByFallback: displayName);
+          noteType: 'team_assignment',
+          targetName: resolvedAssigneeName,
+          content: 'Assigned to $resolvedAssigneeName\n\n'
+              'Status: ${_status == _ChatStatus.open ? 'Open' : 'Closed'}');
 
       if (_coAssignAgentId == null) {
         Get.back();
@@ -414,11 +464,14 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
         return;
       }
 
+      final coAssigneeName = _nameForOption(_agentOptions, _coAssignAgentId);
+      final resolvedCoAssigneeName =
+          coAssigneeName.isNotEmpty ? coAssigneeName : displayName;
       final coAssignResponse = await _callWithRetry(
           (t) => _chatServices.addCoAssignService({
                 'customerKey': widget.customerKey,
                 'coAssignUserIdd': _coAssignAgentId.toString(),
-                'usernameIs': username,
+                'usernameIs': resolvedCoAssigneeName,
                 'comment': comment,
                 'token': t,
               }),
@@ -427,7 +480,9 @@ class _AssignToTeammateDialogState extends State<AssignToTeammateDialog> {
       Get.back();
       if (coAssignResponse['status'] == true) {
         _insertNoteIfPresent(coAssignResponse,
-            noteType: 'team_co_assignment', createdByFallback: displayName);
+            noteType: 'team_co_assignment',
+            targetName: resolvedCoAssigneeName,
+            content: 'Co-assigned to $resolvedCoAssigneeName');
         Get.snackbar(
           'Chat Assigned',
           'Agent assigned and co-assigned successfully.',
