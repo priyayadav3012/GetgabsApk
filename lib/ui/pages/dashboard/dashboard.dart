@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
+import 'package:getgabs/domain/controllers/dashboard/call_logs/call_logs_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/ui/pages/dashboard/call_logs/call_logs_screen.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/chats.dart';
@@ -16,7 +17,10 @@ class DashboardScreen extends StatelessWidget {
     // Initialize call listener when dashboard is built
     final controller = Get.find<DashboardController>();
     controller.initCallListener();
-    
+    // Put here (rather than inside CallLogsScreen) so the missed-call count
+    // is available for the bottom-nav badge as soon as the dashboard builds.
+    final callLogsController = Get.put(CallLogsController());
+
     return GetBuilder<DashboardController>(
       builder: (controller) => Scaffold(
         body: IndexedStack(
@@ -55,9 +59,15 @@ class DashboardScreen extends StatelessWidget {
                   activeIcon: SvgPicture.asset(ImageAssets.messageChatIcon, height: 24, width: 24, color: AppTheme.authButtonColor,),
                 ),
                 BottomNavigationBarItem(
-                  icon: const Icon(Icons.call, size: 24),
+                  icon: Obx(() => _callLogsIcon(
+                        callLogsController.totalMissedCalls.value,
+                        const Icon(Icons.call, size: 24),
+                      )),
                   label: 'Call Logs',
-                  activeIcon: Icon(Icons.call, size: 24, color: AppTheme.authButtonColor),
+                  activeIcon: Obx(() => _callLogsIcon(
+                        callLogsController.totalMissedCalls.value,
+                        Icon(Icons.call, size: 24, color: AppTheme.authButtonColor),
+                      )),
                 ),
                 BottomNavigationBarItem(
                   icon: SvgPicture.asset(ImageAssets.menuIcon, height: 24, width: 24,),
@@ -81,6 +91,15 @@ class DashboardScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _callLogsIcon(int missedCount, Widget icon) {
+    if (missedCount == 0) return icon;
+    return Badge(
+      label: Text(missedCount > 99 ? '99+' : '$missedCount'),
+      backgroundColor: Colors.red,
+      child: icon,
     );
   }
 }

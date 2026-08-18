@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/data/get_storage/get_storage.dart';
+import 'package:getgabs/data/models/call_log_model.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 
 class CallLogsController extends GetxController {
@@ -16,6 +17,76 @@ class CallLogsController extends GetxController {
   var currentPage = 1.obs;
   var lastPage = 1.obs;
   bool _isApiCallInProgress = false;
+
+  // Count of missed calls (across all pages fetched so far) the user
+  // hasn't viewed yet — drives the header/bottom-nav badges.
+  var totalMissedCalls = 0.obs;
+
+  // Missed calls the user has already viewed (by call id) — excluded from
+  // the count above so the badge doesn't reappear for the same calls after
+  // a later page loads or a refresh re-fetches them. There's no backend
+  // "mark as seen" endpoint yet, so this is a local/session-only ack, not
+  // synced to `is_seen` on the server.
+  final Set<String> _acknowledgedMissedCallIds = {};
+
+  // Called when the user opens the Call Logs tab — mirrors WhatsApp's
+  // Calls tab, where just viewing the list clears the unread-missed badge.
+  void markMissedCallsAsSeen() {
+    if (totalMissedCalls.value == 0) return;
+    for (final raw in callLogs) {
+      final entry = CallLogEntry.fromJson(raw);
+      if (entry.isMissed && entry.id.isNotEmpty) {
+        _acknowledgedMissedCallIds.add(entry.id);
+      }
+    }
+    _recalculateMissedCounts();
+  }
+
+  void _recalculateMissedCounts() {
+    int total = 0;
+    for (final raw in callLogs) {
+      final entry = CallLogEntry.fromJson(raw);
+      if (entry.isMissed && !_acknowledgedMissedCallIds.contains(entry.id)) {
+        total++;
+      }
+    }
+    totalMissedCalls.value = total;
+  }
+
+  // Consecutive calls from the same number are folded into a single row,
+  // same as WhatsApp's call log — e.g. three back-to-back missed calls from
+  // one number show up as one entry with a "(3)" count, using the most
+  // recent call's details (time/direction/duration) for display.
+  //
+  // NOTE: reads `callLogs` — call this from inside an Obx (or any reactive
+  // scope) that also reads `callLogs`/`totalMissedCalls` so it recomputes
+  // when the underlying data or the seen-state changes.
+  List<CallLogGroup> get groupedCallLogs {
+    final groups = <CallLogGroup>[];
+    List<CallLogEntry> current = [];
+
+    void flush() {
+      if (current.isEmpty) return;
+      groups.add(CallLogGroup(
+        latest: current.first,
+        callCount: current.length,
+        entries: List.of(current),
+      ));
+      current = [];
+    }
+
+    for (final raw in callLogs) {
+      final entry = CallLogEntry.fromJson(raw);
+      if (current.isNotEmpty && current.last.phoneNumber == entry.phoneNumber) {
+        current.add(entry);
+      } else {
+        flush();
+        current = [entry];
+      }
+    }
+    flush();
+    return groups;
+  }
 
   @override
   void onInit() {
@@ -89,6 +160,7 @@ class CallLogsController extends GetxController {
 
         final parsed = raw.map((e) => Map<String, dynamic>.from(e)).toList();
         callLogs.value = page == 1 ? parsed : [...callLogs, ...parsed];
+        _recalculateMissedCounts();
       } else {
         error.value =
             response['message']?.toString() ?? 'Failed to load call logs';
@@ -102,4 +174,21 @@ class CallLogsController extends GetxController {
       isLoadingMore.value = false;
     }
   }
+}
+
+// One row in the call log list — `latest` is the most recent call in the
+// group, `callCount` is how many consecutive calls from that number were
+// folded into it.
+class CallLogGroup {
+  final CallLogEntry latest;
+  final int callCount;
+  // Every call folded into this row (most recent first), so the row can
+  // expand into an individual-call dropdown when tapped.
+  final List<CallLogEntry> entries;
+
+  CallLogGroup({
+    required this.latest,
+    required this.callCount,
+    required this.entries,
+  });
 }
