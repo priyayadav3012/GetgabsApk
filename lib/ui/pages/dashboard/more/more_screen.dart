@@ -54,8 +54,10 @@ class MoreScreen extends StatefulWidget {
 
 class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateMixin {
 
-  // Fetch continuous dynamic network state and duplex data logic streams via controller
-  final SocketsController _socketsController = Get.find();
+  // Socket.IO retired for chat (see DashboardBinding) — no longer registered,
+  // so this is nullable and every use below is guarded accordingly.
+  final SocketsController? _socketsController =
+      Get.isRegistered<SocketsController>() ? Get.find() : null;
   // Fetch cloud-synchronized user entity profile variables
   final ProfileController profileController = Get.put(ProfileController());
 
@@ -200,7 +202,7 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
                 await FirebaseMessaging.instance.deleteToken();
 
                 // Step 2: Disconnects active web gateway network server connections
-                _socketsController.disconnectSocket();
+                _socketsController?.disconnectSocket();
 
                 // Step 3: Wipes local hardware user data security cache indices 
                 GetStorageUserData userData = GetStorageUserData();

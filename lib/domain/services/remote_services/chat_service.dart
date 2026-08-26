@@ -75,6 +75,15 @@ Future<dynamic> sendReplyChatService(var data, {var headers}) async {
   );
   return response;
 }
+  Future<dynamic> updateCustomerNameService(var data, {var headers}) async {
+    dynamic response = _apiService.postApi(
+        data,
+        ApiEndPoints.baseUrl +
+            ApiEndPoints.chatEndPoints.customerNameUpdateUrl,
+        headers: headers);
+    return response;
+  }
+
   Future<dynamic>searchCustomer(var data, {var headers}) async {
     dynamic response = _apiService.postApi(
         data, ApiEndPoints.baseUrl + ApiEndPoints.chatEndPoints.searchCustomer,

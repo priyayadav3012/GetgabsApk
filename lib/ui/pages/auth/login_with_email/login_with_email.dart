@@ -103,9 +103,10 @@ class LoginWithEmailScreen extends StatelessWidget {
 
                 SizedBox(height: hp * 0.018),
 
-                // Badge — Scalewiz is not a Meta Official Partner, so this is
-                // hidden for that flavor only.
-                if (!_C.isScalewiz)
+                // Badge — only GetGabs is a Meta Official Partner; Scalewiz
+                // and Messagedly aren't, so it's hidden for those flavors
+                // (Apple flagged the Messagedly build over this exact claim).
+                if (!_C.isScalewiz && !_C.isMessagedly)
                   _Anim(opacity: c.opacity(0.00, 0.40),
                         offset:  c.offset(0.00, 0.40, start: const Offset(0, -0.22)),
                         child: const Center(child: _Badge())),

@@ -502,7 +502,11 @@ final TextEditingController headerTextController = TextEditingController();
 
   final ScrollController scrollController = ScrollController();
 
-  late SocketsController _socketsController;
+  // Socket.IO retired for chat (see DashboardBinding) — no longer registered,
+  // so this stays null and every use below is guarded accordingly. New
+  // messages now arrive via FCM (NotificationService.firebaseInit()), which
+  // delivers directly into the open chat the same way this used to.
+  SocketsController? _socketsController;
 
   @override
   void onInit() {
@@ -515,7 +519,7 @@ final TextEditingController headerTextController = TextEditingController();
     // the chat unregistered and live delivery silently dead.)
     if (Get.isRegistered<SocketsController>()) {
       _socketsController = Get.find<SocketsController>();
-      _socketsController.registerOpenChat(this);
+      _socketsController?.registerOpenChat(this);
     } else {
       debugPrint('SocketsController not registered when opening chat!');
     }
@@ -553,12 +557,9 @@ final TextEditingController headerTextController = TextEditingController();
         groupedMessages.assignAll(groupMessagesByDate(messageChatList));
       });
 
-      // Open-chat registration already happened synchronously in onInit.
-      // SocketsController owns the single 'chatdata'/'messagestatus' listeners
-      // and routes events straight to this controller; we no longer call
-      // socket.on() per-page (that leaked listeners and broke live delivery).
-      _socketsController = Get.find<SocketsController>();
-      _socketsController.registerOpenChat(this);
+      // Open-chat registration already happened synchronously in onInit
+      // (guarded there — SocketsController may not be registered at all now
+      // that chat has moved to FCM).
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         var dc = Get.find<DashboardController>();
@@ -765,7 +766,30 @@ void toggleAiPause() async {
       isAiToggleLoading.value = false;
     }
   }
-  
+
+  var isUpdatingCustomerName = false.obs;
+
+  /// Renames the customer whose chat is currently open — delegates to
+  /// DashboardController so the chat list (active/rolling-over) picks up
+  /// the new name too, then reflects it on this screen's own header.
+  Future<bool> updateCustomerName(String newName) async {
+    if (isUpdatingCustomerName.value) return false;
+    isUpdatingCustomerName.value = true;
+    try {
+      if (!Get.isRegistered<DashboardController>()) return false;
+      final ok = await Get.find<DashboardController>().updateCustomerName(
+        profileWaKey: profileWaKey,
+        newName: newName,
+      );
+      if (ok) {
+        userProfile.value = userProfile.value.copyWith(profileName: newName);
+      }
+      return ok;
+    } finally {
+      isUpdatingCustomerName.value = false;
+    }
+  }
+
  var shortMessages = <Map<String, dynamic>>[].obs;
 var isShortMessagesLoading = false.obs;
 var shortMessagesError = ''.obs;
@@ -837,14 +861,47 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
         debugPrint('📱 New message received from: ${messageData['profile_wa_key']}');
         var receivedMessage = Message.fromJson(messageData);
 
+        // The backend re-sends the SAME message over FCM as its
+        // delivery_status progresses (sent → delivered → read), not just
+        // for genuinely new messages — this same messageId is what
+        // keyForMessage() caches one GlobalKey for, so blindly re-inserting
+        // it as a second row would hand two widgets the same GlobalKey
+        // ("Multiple widgets used the same GlobalKey", thrown repeatedly).
+        // So: if it's already in the list, this is a status update — apply
+        // it in place instead of ignoring it, which is what made read/
+        // delivered ticks depend entirely on the slower 3-second REST
+        // resync fallback instead of updating instantly off this push.
+        final existingIndex = messageChatList
+            .indexWhere((m) => m.messageId == receivedMessage.messageId);
+        if (existingIndex != -1) {
+          final current = messageChatList[existingIndex];
+          if (current.deliveryStatus?.toLowerCase() !=
+              receivedMessage.deliveryStatus?.toLowerCase()) {
+            messageChatList[existingIndex] = current.copyWith(
+              deliveryStatus: receivedMessage.deliveryStatus,
+            );
+            groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+            debugPrint('✅ Status updated live for '
+                '${receivedMessage.messageId}: ${receivedMessage.deliveryStatus}');
+          }
+          return;
+        }
+
         // Insert the new message at the beginning of the list
         messageChatList.insert(0, receivedMessage);
         groupedMessages.assignAll(groupMessagesByDate(messageChatList));
 
-if (Get.isRegistered<DashboardController>()) {
-          final dc = Get.find<DashboardController>();
-          dc.markChatAsRead(profileWaKey);
-          dc.refreshActiveChatList(increment: 'replace');
+        // markChatAsRead is a local list update (no network call) — the
+        // dashboard row's unread badge was already bumped by
+        // bumpChatOnIncomingMessage() before this ran, so this only needs
+        // to zero it back out since this chat is open. A REST-refetch
+        // refreshActiveChatList() call used to sit here too, re-fetching
+        // and replacing the *entire* dashboard chat list on every single
+        // incoming message while this chat was open — same "poori list
+        // update ho rahi hai" issue fixed elsewhere, just a second spot it
+        // was still happening from.
+        if (Get.isRegistered<DashboardController>()) {
+          Get.find<DashboardController>().markChatAsRead(profileWaKey);
         }
 
         // Mark message as read IMMEDIATELY using cached user info
@@ -857,7 +914,7 @@ if (Get.isRegistered<DashboardController>()) {
           return; // Skip emit if adminId is not ready
         }
         
-        _socketsController.updateChatToRead(
+        _socketsController?.updateChatToRead(
             role: role,
             userId: userId,
             adminId: adminId,
@@ -885,7 +942,7 @@ if (Get.isRegistered<DashboardController>()) {
   Future<void> markMessageAsReadImmediately(String messageId) async {
     try {
       debugPrint('⚡ Marking message $messageId as read IMMEDIATELY');
-      _socketsController.updateChatToRead(
+      _socketsController?.updateChatToRead(
         role: role,
         userId: userId,
         adminId: adminId,
@@ -1093,7 +1150,7 @@ if (Get.isRegistered<DashboardController>()) {
       // Send read status for each message immediately (no delays)
       for (var messageId in messagesToMarkAsRead) {
         debugPrint('⚡ Sending read status NOW for message: $messageId');
-        _socketsController.updateChatToRead(
+        _socketsController?.updateChatToRead(
           role: role,
           userId: userId,
           adminId: adminId,

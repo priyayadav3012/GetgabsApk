@@ -197,6 +197,12 @@ class DashboardController extends GetxController {
     notificationService.getDeviceToken();
     notificationService.setupInteractMessage();
     notificationService.onInitTopic();
+    // Registers FirebaseMessaging.onMessage — the FOREGROUND listener. This
+    // was defined but never actually called anywhere, so foreground FCM
+    // messages (new chat data, etc.) were silently never processed while
+    // the app was open; only the separate background handler in main.dart
+    // ever ran.
+    notificationService.firebaseInit();
 
     activeChatListApi();
     rollingOverChatListApi();
@@ -283,6 +289,132 @@ class DashboardController extends GetxController {
       final profile = rollingOverProfileDetailsList.removeAt(rollingIndex);
       rollingOverProfileDetailsList.insert(
           0, profile.copyWith(updatedTime: time));
+    }
+  }
+
+  /// Lightweight, local update for an incoming customer message (FCM chat
+  /// payload) — bumps the chat to the top and bumps its unread badge,
+  /// entirely client-side. This replaces what used to be a full
+  /// refreshActiveChatList/refreshRollingOverChatList REST refetch on
+  /// *every single* incoming message — which re-fetched and replaced the
+  /// whole chat list each time, visibly reloading it instead of just
+  /// floating the one relevant chat to the top the way WhatsApp (and the
+  /// old Socket.IO handler before it was retired) does.
+  void bumpChatOnIncomingMessage({
+    required String profileWaKey,
+    required String customerName,
+    required int customerWaId,
+    required bool isCurrentlyOpen,
+    String? updatedTime,
+  }) {
+    final time =
+        updatedTime ?? DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
+
+    final activeIndex =
+        activeProfileDetailsList.indexWhere((p) => p.profileWaKey == profileWaKey);
+    if (activeIndex != -1) {
+      final profile = activeProfileDetailsList.removeAt(activeIndex);
+      activeProfileDetailsList.insert(
+        0,
+        profile.copyWith(
+          updatedTime: time,
+          getPendingMsgCount:
+              isCurrentlyOpen ? 0 : profile.getPendingMsgCount + 1,
+        ),
+      );
+      return;
+    }
+
+    final rollingIndex = rollingOverProfileDetailsList
+        .indexWhere((p) => p.profileWaKey == profileWaKey);
+    if (rollingIndex != -1) {
+      final profile = rollingOverProfileDetailsList.removeAt(rollingIndex);
+      rollingOverProfileDetailsList.insert(
+        0,
+        profile.copyWith(
+          updatedTime: time,
+          getPendingMsgCount:
+              isCurrentlyOpen ? 0 : profile.getPendingMsgCount + 1,
+        ),
+      );
+      return;
+    }
+
+    // Brand-new customer not yet in either list.
+    activeProfileDetailsList.insert(
+      0,
+      Profile(
+        profileWaId: customerWaId,
+        profileWaKey: profileWaKey,
+        profileName: customerName,
+        getPendingMsgCount: isCurrentlyOpen ? 0 : 1,
+        updatedTime: time,
+        hasVoiceCallingPermission: false,
+      ),
+    );
+  }
+
+  /// Renames a customer via the customer-name-update API and reflects the
+  /// new name locally in whichever list (active/rolling-over) they're in —
+  /// mirrors bumpChatOnIncomingMessage's local-list-sync approach instead of
+  /// a full refetch.
+  Future<bool> updateCustomerName({
+    required String profileWaKey,
+    required String newName,
+  }) async {
+    try {
+      final parentUserId = await userData.getParentUserId();
+      final currentUserId = await userData.getLoggedInUserId();
+      final apiKey = await userData.getApiKey();
+
+      final data = {
+        "parent_user_id": parentUserId,
+        "current_user_id": currentUserId,
+        "api_key": apiKey,
+        "customer_key": profileWaKey,
+        "customer_name": newName,
+      };
+      Map<String, String> headers = {
+        "X-Client-GetGabs": apiKey.toString(),
+        "Content-Type": "application/json"
+      };
+
+      debugPrint('✏️ customer-name-update request: $data');
+      final value =
+          await chatServices.updateCustomerNameService(data, headers: headers);
+      debugPrint('✏️ customer-name-update response: $value');
+      if (value['status'] != true) {
+        EasyLoading.showError(
+            value['message']?.toString() ?? 'Failed to update name',
+            duration: const Duration(seconds: 5));
+        return false;
+      }
+
+      final savedName =
+          value['data']?['customer_name']?.toString() ?? newName;
+
+      final activeIndex = activeProfileDetailsList
+          .indexWhere((p) => p.profileWaKey == profileWaKey);
+      if (activeIndex != -1) {
+        activeProfileDetailsList[activeIndex] =
+            activeProfileDetailsList[activeIndex]
+                .copyWith(profileName: savedName);
+      }
+
+      final rollingIndex = rollingOverProfileDetailsList
+          .indexWhere((p) => p.profileWaKey == profileWaKey);
+      if (rollingIndex != -1) {
+        rollingOverProfileDetailsList[rollingIndex] =
+            rollingOverProfileDetailsList[rollingIndex]
+                .copyWith(profileName: savedName);
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('❌ updateCustomerName error: $e');
+      EasyLoading.showError('Something went wrong',
+          duration: const Duration(seconds: 5));
+      return false;
     }
   }
 

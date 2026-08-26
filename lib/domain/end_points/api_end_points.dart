@@ -65,6 +65,7 @@ class _ChatEndPoints {
   final String sendShortMessage = "send-message";
   final String voiceCallLogs = "voiceCallLogs";
   final String sendReplyChat = "sendReplyChat";
+  final String customerNameUpdateUrl = "customer-name-update";
 }
 
 class _MoreScreenEndPoints {

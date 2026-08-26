@@ -248,126 +248,129 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
 //     print("❌ Socket Error: $e");
 //   }
 // });
-    _socket.on('chatdata', (data) async {
-      print('Chat data socket33: $data');
-      var messageData = data['data'];
-      String name = data['customerprofilename'];
-      String mobNumber = data['customerprofile_wa_id'];
+    // _socket.on('chatdata', (data) async {
+    //   print('Chat data socket33: $data');
+    //   var messageData = data['data'];
+    //   String name = data['customerprofilename'];
+    //   String mobNumber = data['customerprofile_wa_id'];
 
-      if (Get.isDialogOpen ?? false) {
-        Get.back();
-      }
+    //   if (Get.isDialogOpen ?? false) {
+    //     Get.back();
+    //   }
 
-      try {
-        var dc = Get.find<DashboardController>();
-        // Extract profileWaKey from incoming data
-        String incomingWaKey = messageData['profile_wa_key'];
-        //int pendingMsgCount = messageData['getpendingmsg_count'];
+    //   try {
+    //     var dc = Get.find<DashboardController>();
+    //     // Extract profileWaKey from incoming data
+    //     String incomingWaKey = messageData['profile_wa_key'];
+    //     //int pendingMsgCount = messageData['getpendingmsg_count'];
 
-        // Find the existing profile if it exists
-        int existingIndex = dc.activeProfileDetailsList
-            .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
+    //     // Find the existing profile if it exists
+    //     int existingIndex = dc.activeProfileDetailsList
+    //         .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
 
-        final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
+    //     final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
 
-        // Also check the rolling-over (closed) tab — previously only the
-        // active tab ever reordered/refreshed on a live incoming message.
-        int existingRollingIndex = dc.rollingOverProfileDetailsList
-            .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
+    //     // Also check the rolling-over (closed) tab — previously only the
+    //     // active tab ever reordered/refreshed on a live incoming message.
+    //     int existingRollingIndex = dc.rollingOverProfileDetailsList
+    //         .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
 
-        if (existingIndex != -1) {
-          print('exists---------------------');
-          // Profile exists, bring it to the top
-          var existingProfile =
-              dc.activeProfileDetailsList.removeAt(existingIndex);
-          dc.activeProfileDetailsList.insert(
-            0,
-            existingProfile.copyWith(
-              getPendingMsgCount: isOnMessagesPage(incomingWaKey)
-                  ? 0
-                  : existingProfile.getPendingMsgCount +
-                      1, // Update pending message count
-              updatedTime: nowStr,
-            ),
-          );
-        } else if (existingRollingIndex != -1) {
-          print('exists in rolling-over---------------------');
-          var existingRollingProfile =
-              dc.rollingOverProfileDetailsList.removeAt(existingRollingIndex);
-          dc.rollingOverProfileDetailsList.insert(
-            0,
-            existingRollingProfile.copyWith(
-              getPendingMsgCount: isOnMessagesPage(incomingWaKey)
-                  ? 0
-                  : existingRollingProfile.getPendingMsgCount + 1,
-              updatedTime: nowStr,
-            ),
-          );
-        } else {
-          print('new---------------------');
+    //     if (existingIndex != -1) {
+    //       print('exists---------------------');
+    //       // Profile exists, bring it to the top
+    //       var existingProfile =
+    //           dc.activeProfileDetailsList.removeAt(existingIndex);
+    //       dc.activeProfileDetailsList.insert(
+    //         0,
+    //         existingProfile.copyWith(
+    //           getPendingMsgCount: isOnMessagesPage(incomingWaKey)
+    //               ? 0
+    //               : existingProfile.getPendingMsgCount +
+    //                   1, // Update pending message count
+    //           updatedTime: nowStr,
+    //         ),
+    //       );
+    //     } else if (existingRollingIndex != -1) {
+    //       print('exists in rolling-over---------------------');
+    //       var existingRollingProfile =
+    //           dc.rollingOverProfileDetailsList.removeAt(existingRollingIndex);
+    //       dc.rollingOverProfileDetailsList.insert(
+    //         0,
+    //         existingRollingProfile.copyWith(
+    //           getPendingMsgCount: isOnMessagesPage(incomingWaKey)
+    //               ? 0
+    //               : existingRollingProfile.getPendingMsgCount + 1,
+    //           updatedTime: nowStr,
+    //         ),
+    //       );
+    //     } else {
+    //       print('new---------------------');
 
-          // Profile does not exist, create a new one and add it to the top
-          int count = 1;
-          if (isOnMessagesPage(incomingWaKey)) {
-            count = 0;
-          }
+    //       // Profile does not exist, create a new one and add it to the top
+    //       int count = 1;
+    //       if (isOnMessagesPage(incomingWaKey)) {
+    //         count = 0;
+    //       }
 
-          dc.activeProfileDetailsList.insert(
-            0,
-            Profile(
-              profileWaId: int.parse(mobNumber),
-              profileWaKey: incomingWaKey,
-              profileName: name,
-              getPendingMsgCount: count,
-              updatedTime: nowStr,
-              hasVoiceCallingPermission: false,
-            ),
-          );
-          // dc.activeProfileDetailsList.insert(
-          //   0,
-          //   Profile(
-          //     profileWaId:int.parse(mobNumber) ,
-          //     profileWaKey: incomingWaKey,
-          //     profileName: name,
-          //     getPendingMsgCount: count,
-          //   ),
-          // );
-        }
+    //       dc.activeProfileDetailsList.insert(
+    //         0,
+    //         Profile(
+    //           profileWaId: int.parse(mobNumber),
+    //           profileWaKey: incomingWaKey,
+    //           profileName: name,
+    //           getPendingMsgCount: count,
+    //           updatedTime: nowStr,
+    //           hasVoiceCallingPermission: false,
+    //         ),
+    //       );
+    //       // dc.activeProfileDetailsList.insert(
+    //       //   0,
+    //       //   Profile(
+    //       //     profileWaId:int.parse(mobNumber) ,
+    //       //     profileWaKey: incomingWaKey,
+    //       //     profileName: name,
+    //       //     getPendingMsgCount: count,
+    //       //   ),
+    //       // );
+    //     }
 
-        // Deliver the message into the open chat live (WhatsApp-style) so it
-        // renders instantly without needing a reopen. Guarded by the wa-key so
-        // a message for a different chat never lands in the wrong conversation.
-        final openChat = _openChat;
-        final bool isForOpenChat =
-            openChat != null && openChat.profileWaKey == incomingWaKey;
-        if (isForOpenChat) {
-          try {
-            openChat.handleIncomingMessage(data);
-          } catch (e) {
-            debugPrint('Error delivering live message to open chat: $e');
-          }
-        }
+    //     // Deliver the message into the open chat live (WhatsApp-style) so it
+    //     // renders instantly without needing a reopen. Guarded by the wa-key so
+    //     // a message for a different chat never lands in the wrong conversation.
+    //     final openChat = _openChat;
+    //     final bool isForOpenChat =
+    //         openChat != null && openChat.profileWaKey == incomingWaKey;
+    //     if (isForOpenChat) {
+    //       try {
+    //         openChat.handleIncomingMessage(data);
+    //       } catch (e) {
+    //         debugPrint('Error delivering live message to open chat: $e');
+    //       }
+    //     }
 
-        if (Get.currentRoute.contains('/MessagesPage')) {
-          print('Socket notifications');
-          if (isForOpenChat) {
-            // Same chat is open and in the foreground: no notification needed.
-            if (!isAppInForeground.value) {
-              handleNotification(data);
-            }
-          } else {
-            // A chat is open but the message is for a different conversation.
-            handleNotification(data);
-          }
-        } else {
-          //  dc.refreshActiveChatList();
-          handleNotification(data);
-        }
-      } catch (e) {
-        print(e);
-      }
-    });
+    //     if (Get.currentRoute.contains('/MessagesPage')) {
+    //       print('Socket notifications');
+    //       if (isForOpenChat) {
+    //         // Same chat is open and in the foreground: no notification needed.
+    //         if (!isAppInForeground.value) {
+    //           handleNotification(data);
+    //         }
+    //       } else {
+    //         // A chat is open but the message is for a different conversation.
+    //         handleNotification(data);
+    //       }
+    //     } else {
+    //       //  dc.refreshActiveChatList();
+    //       handleNotification(data);
+    //     }
+    //   } catch (e) {
+    //     print(e);
+    //   }
+    // });
 
+    
+    
+    
     // Single app-lifetime listener for delivery-status updates, routed to the
     // open chat. Previously each MessagesPageController registered its own
     // 'messagestatus' listener and never removed it, so these accumulated the

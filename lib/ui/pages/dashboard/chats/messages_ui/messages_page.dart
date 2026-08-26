@@ -13,7 +13,7 @@ import 'package:getgabs/ui/pages/chat_uis/swipe_to_reply_wrapper.dart';
 import 'package:getgabs/ui/pages/chat_uis/templete_message_uis/templete_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
-import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/customer_profile_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/shortmessagesheet.dart';
 import 'package:getgabs/ui/res/widgets/skeleton_loaders.dart';
 import 'package:getgabs/ui/themes/themes.dart';
@@ -78,39 +78,42 @@ class MessagesPage extends StatelessWidget {
           // loading/on failure since CircleAvatar has no fallback color).
           final safeName =
               cleanName(messagesPageController.userProfile.value.profileName);
-          return Row(
-            children: [
-              CircleAvatar(
-                backgroundColor: getAvatarBgColor(safeDecode(safeName)),
-                child: Text(
-                  getInitialsSafe(safeName),
-                  style: TextStyle(
-                    color: getAvatarTextColor(safeDecode(safeName)),
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
+          return InkWell(
+            onTap: () => showCustomerProfileDialog(messagesPageController),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: getAvatarBgColor(safeDecode(safeName)),
+                  child: Text(
+                    getInitialsSafe(safeName),
+                    style: TextStyle(
+                      color: getAvatarTextColor(safeDecode(safeName)),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
-              SizedBox(width: mediaQuery.width * 0.025),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      messagesPageController.userProfile.value.profileName,
-                      style: const TextStyle(fontSize: 16),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                    Text(
-                      messagesPageController.userProfile.value.profileWaId
-                          .toString(),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
+                SizedBox(width: mediaQuery.width * 0.025),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        messagesPageController.userProfile.value.profileName,
+                        style: const TextStyle(fontSize: 16),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                      Text(
+                        messagesPageController.userProfile.value.profileWaId
+                            .toString(),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           );
         }),
         actions: [
@@ -136,90 +139,6 @@ class MessagesPage extends StatelessWidget {
               ),
             ),
             tooltip: 'Call',
-          ),
-          PopupMenuButton<String>(
-            tooltip: 'More options',
-            offset: const Offset(0, 45),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            icon: Obx(() => Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: messagesPageController.isAiPaused.value
-                        ? const Color(0xFFFF5722).withOpacity(0.1)
-                        : AppTheme.greyColor.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: messagesPageController.isAiToggleLoading.value
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          Icons.more_vert,
-                          color: messagesPageController.isAiPaused.value
-                              ? const Color(0xFFFF5722)
-                              : AppTheme.blackColor,
-                          size: 20,
-                        ),
-                )),
-            onSelected: (value) {
-              if (value == 'toggle_ai') {
-                if (!messagesPageController.isAiToggleLoading.value) {
-                  messagesPageController.toggleAiPause();
-                }
-              } else if (value == 'assign_chat') {
-                showAssignToTeammateDialog(
-                  customerKey: profileWaKey,
-                  customerName:
-                      messagesPageController.userProfile.value.profileName,
-                  customerPhone: messagesPageController
-                      .userProfile.value.profileWaId
-                      .toString(),
-                  messagesPageController: messagesPageController,
-                  isAlreadyAssignedToAgent:
-                      messagesPageController.userProfile.value.assignedUserId !=
-                          null,
-                  currentAssignedAgentId:
-                      messagesPageController.userProfile.value.assignedUserId,
-                );
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'toggle_ai',
-                child: Row(
-                  children: [
-                    Icon(
-                      messagesPageController.isAiPaused.value
-                          ? Icons.play_circle_outline // Resume AI
-                          : Icons.pause_circle_outline, // Pause AI
-                      color: messagesPageController.isAiPaused.value
-                          ? const Color(0xFFFF5722)
-                          : const Color(0xFF2196F3),
-                      size: 18,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(messagesPageController.isAiPaused.value
-                        ? 'Resume AI'
-                        : 'Pause AI'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'assign_chat',
-                child: Row(
-                  children: [
-                    Icon(Icons.person_add_alt_1,
-                        color: AppTheme.blackColor, size: 18),
-                    SizedBox(width: 10),
-                    Text('Assign Chat'),
-                  ],
-                ),
-              ),
-            ],
           ),
         ],
       ),
