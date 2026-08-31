@@ -41,7 +41,8 @@
          <application
         android:label="@string/app_name"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -52,8 +53,7 @@
             android:hardwareAccelerated="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:windowSoftInputMode="adjustResize"
-            android:usesCleartextTraffic="true">
+            android:windowSoftInputMode="adjustResize">
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
@@ -77,6 +77,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Without this, any FCM push that includes a `notification` block
+             (instead of data-only) gets auto-displayed by the OS using its
+             own "fcm_fallback_notification_channel" at IMPORTANCE_DEFAULT —
+             no heads-up, no sound — instead of our own "message" channel
+             (created at IMPORTANCE_MAX in notification_service.dart), which
+             is why chat notifications only sometimes popped up like
+             WhatsApp's, depending on whether the backend sent a notification
+             block for that particular push. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="message" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

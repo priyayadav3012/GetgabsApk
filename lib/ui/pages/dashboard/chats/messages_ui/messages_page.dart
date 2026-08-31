@@ -9,10 +9,11 @@ import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/ui/pages/chat_uis/contact_message_ui/contact_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/interactive_message/interactive_message_ui.dart';
+import 'package:getgabs/ui/pages/chat_uis/swipe_to_reply_wrapper.dart';
 import 'package:getgabs/ui/pages/chat_uis/templete_message_uis/templete_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/active_chats/active_chat_list_tile.dart';
-import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/assign_to_teammate_dialog.dart';
+import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/customer_profile_dialog.dart';
 import 'package:getgabs/ui/pages/dashboard/chats/messages_ui/shortmessagesheet.dart';
 import 'package:getgabs/ui/res/widgets/skeleton_loaders.dart';
 import 'package:getgabs/ui/themes/themes.dart';
@@ -75,9 +76,11 @@ class MessagesPage extends StatelessWidget {
           // Same colored-initials style as the chat list avatar, instead of
           // a ui-avatars.com network image (which showed as plain grey while
           // loading/on failure since CircleAvatar has no fallback color).
-          final safeName = cleanName(
-              messagesPageController.userProfile.value.profileName);
-          return Row(
+          final safeName =
+              cleanName(messagesPageController.userProfile.value.profileName);
+          return InkWell(
+            onTap: () => showCustomerProfileDialog(messagesPageController),
+            child: Row(
               children: [
                 CircleAvatar(
                   backgroundColor: getAvatarBgColor(safeDecode(safeName)),
@@ -110,7 +113,8 @@ class MessagesPage extends StatelessWidget {
                   ),
                 ),
               ],
-            );
+            ),
+          );
         }),
         actions: [
           // Call Button - Opens WhatsApp-style calling
@@ -136,90 +140,6 @@ class MessagesPage extends StatelessWidget {
             ),
             tooltip: 'Call',
           ),
-          PopupMenuButton<String>(
-            tooltip: 'More options',
-            offset: const Offset(0, 45),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            icon: Obx(() => Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: messagesPageController.isAiPaused.value
-                        ? const Color(0xFFFF5722).withOpacity(0.1)
-                        : AppTheme.greyColor.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: messagesPageController.isAiToggleLoading.value
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Icon(
-                          Icons.more_vert,
-                          color: messagesPageController.isAiPaused.value
-                              ? const Color(0xFFFF5722)
-                              : AppTheme.blackColor,
-                          size: 20,
-                        ),
-                )),
-            onSelected: (value) {
-              if (value == 'toggle_ai') {
-                if (!messagesPageController.isAiToggleLoading.value) {
-                  messagesPageController.toggleAiPause();
-                }
-              } else if (value == 'assign_chat') {
-                showAssignToTeammateDialog(
-                  customerKey: profileWaKey,
-                  customerName:
-                      messagesPageController.userProfile.value.profileName,
-                  customerPhone: messagesPageController
-                      .userProfile.value.profileWaId
-                      .toString(),
-                  messagesPageController: messagesPageController,
-                  isAlreadyAssignedToAgent: messagesPageController
-                          .userProfile.value.assignedUserId !=
-                      null,
-                  currentAssignedAgentId:
-                      messagesPageController.userProfile.value.assignedUserId,
-                );
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'toggle_ai',
-                child: Row(
-                  children: [
-                    Icon(
-                      messagesPageController.isAiPaused.value
-                          ? Icons.play_circle_outline // Resume AI
-                          : Icons.pause_circle_outline, // Pause AI
-                      color: messagesPageController.isAiPaused.value
-                          ? const Color(0xFFFF5722)
-                          : const Color(0xFF2196F3),
-                      size: 18,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(messagesPageController.isAiPaused.value
-                        ? 'Resume AI'
-                        : 'Pause AI'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'assign_chat',
-                child: Row(
-                  children: [
-                    Icon(Icons.person_add_alt_1,
-                        color: AppTheme.blackColor, size: 18),
-                    SizedBox(width: 10),
-                    Text('Assign Chat'),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ],
       ),
       body: SafeArea(
@@ -235,7 +155,9 @@ class MessagesPage extends StatelessWidget {
             children: [
               /// ================= CHAT LIST =================
               Expanded(
-                child: Obx(() {
+                child: Stack(
+                  children: [
+                    Obx(() {
                   if (messagesPageController.isInitialChatLoading.value) {
                     return const MessagesSkeleton();
                   }
@@ -246,6 +168,14 @@ class MessagesPage extends StatelessWidget {
 
                   return ListView.builder(
                     reverse: true,
+                    // The reaction badge on a message bubble overflows a
+                    // few px below the bubble itself (see _wrapWithReaction)
+                    // — without room to render into, the newest message
+                    // (bottom-most in this reversed list, right against the
+                    // composer) had its badge clipped by the list's own
+                    // edge. Padding both sides since reverse:true swaps
+                    // which EdgeInsets side lands at the visual bottom.
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     controller: messagesPageController.scrollController,
                     itemCount:
                         messagesPageController.groupedMessages.keys.length,
@@ -278,18 +208,84 @@ class MessagesPage extends StatelessWidget {
 
                           /// ---------- Messages ----------
                           ...messages.map(
-                            (message) =>
-                                buildMessageWidget(message, mediaQuery),
+                            (message) => Obx(() {
+                              final isHighlighted = messagesPageController
+                                      .highlightedMessageId.value ==
+                                  message.messageId;
+                              return Container(
+                                key: messagesPageController
+                                    .keyForMessage(message.messageId),
+                                color: isHighlighted
+                                    ? const Color(0xFFD3E3FD)
+                                    : Colors.transparent,
+                                child: message.messageType == 'note'
+                                    // Notes are internal team/assignment
+                                    // notes, not real WhatsApp messages in
+                                    // the thread — replying to one doesn't
+                                    // make sense (sendReplyChat quotes an
+                                    // actual conversation message), so skip
+                                    // the swipe-to-reply gesture entirely.
+                                    ? _wrapWithSenderName(
+                                        message,
+                                        _wrapWithReaction(
+                                          message,
+                                          buildMessageWidget(
+                                              message, mediaQuery),
+                                        ),
+                                        messagesPageController,
+                                        mediaQuery,
+                                      )
+                                    : SwipeToReplyWrapper(
+                                        onReply: () => messagesPageController
+                                            .startReply(message),
+                                        child: _wrapWithSenderName(
+                                          message,
+                                          _wrapWithReaction(
+                                            message,
+                                            buildMessageWidget(
+                                                message, mediaQuery),
+                                          ),
+                                          messagesPageController,
+                                          mediaQuery,
+                                        ),
+                                      ),
+                              );
+                            }),
                           ),
                         ],
                       );
                     },
                   );
                 }),
+                    Obx(() {
+                      if (!messagesPageController.showJumpToLatest.value) {
+                        return const SizedBox.shrink();
+                      }
+                      return Positioned(
+                        right: 12,
+                        bottom: 12,
+                        child: Material(
+                          color: Colors.white,
+                          shape: const CircleBorder(),
+                          elevation: 4,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: messagesPageController.jumpToLatestMessage,
+                            child: const SizedBox(
+                              width: 40,
+                              height: 40,
+                              child: Icon(Icons.keyboard_double_arrow_down,
+                                  color: Colors.black54, size: 22),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
               ),
 
               // const Divider(height: 1),
-              const Divider(),
 
               /// ================= INPUT FIELD =================
               _buildInputField(
@@ -385,178 +381,261 @@ class MessagesPage extends StatelessWidget {
     );
   }
 
-  Widget buildMessageWidget(Message message, Size mediaQuery) {
-  //   if (message.messageType == 'text') {
-  // return TextMessageUi(
-  //   text: message.messageText, // ← messageText ki jagah
-  //   isSentByMe: message.sender == 1 ? false : true,
-  //   createdAt: message.createdAt,
-  //   mediaQuery: mediaQuery,
-  //   deliveryStatus: message.deliveryStatus ?? "sent",
-  // );
+  // Overlays a small WhatsApp-style emoji badge on the tail corner of an
+  // already-built message bubble — bottom-right for a sent message, bottom-
+  // left for a received one (mirrors BaseMessageUi's tail corner, the one
+  // with borderRadius 0) — without needing every message-type widget to
+  // thread a new parameter down into BaseMessageUi.
+  Widget _wrapWithReaction(Message message, Widget bubble) {
+    final emoji = message.reactionEmoji;
+    if (emoji == null || emoji.isEmpty) return bubble;
 
-  //   } 
-  // ✅ BAAD — parentheses se fix
-if (message.messageType == 'text') {
-  String displayText = message.messageText;
-  try {
-    final decoded = jsonDecode(message.messageText);
-    final body = decoded['text']?['body']?.toString();
-    if (body != null && body.isNotEmpty) displayText = body;
-  } catch (_) {}
-  return TextMessageUi(
-    text: displayText,
-    isSentByMe: message.sender == 1 ? false : true,
-    createdAt: message.createdAt,
-    mediaQuery: mediaQuery,
-    deliveryStatus: message.deliveryStatus ?? "sent",
-  );
-
-} else if (message.messageType == 'template') {
-  
-  // ✅ templateData hai — real template
-  if (message.templateData != null && message.templateData!.isNotEmpty) {
-    return TempleteMessageUi(
-      templateData: message.templateData,
-      messageText: message.messageText,
-      isSentByMe: message.sender == 1 ? false : true,
-      createdAt: message.createdAt,
-      mediaQuery: mediaQuery,
-      deliveryStatus: message.deliveryStatus ?? "sent",
-      messageType: message.messageType,
-      senderName: '',
+    final isSentByMe = message.sender != 1;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        bubble,
+        Positioned(
+          bottom: -8,
+          right: isSentByMe ? 18 : null,
+          left: isSentByMe ? null : 18,
+          child: Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 3,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Text(
+              emoji,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, height: 1),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  // ✅ templateData null — short message type check karo
-  final msgText = message.messageText;
-  try {
-    final decoded = jsonDecode(msgText);
-    final type = decoded['type']?.toString() ?? '';
+  // Shows who sent a sent bubble — WATI/Interakt-style attribution for a
+  // shared inbox where multiple agents reply from the same WhatsApp number.
+  // Resolution logic lives in MessagesPageController.resolveSenderDisplayName
+  // (shared with the Team Note card's own header name).
+  Widget _wrapWithSenderName(
+    Message message,
+    Widget bubble,
+    MessagesPageController controller,
+    Size mediaQuery,
+  ) {
+    // NoteMessageUi shows its own "who" attribution inline in its header —
+    // don't also stack this label underneath it.
+    if (message.messageType == 'note') return bubble;
 
-    if (type == 'text') {
-      final body = decoded['text']?['body']?.toString() ?? '';
-      return TextMessageUi(
-        text: body.isNotEmpty ? body : msgText,
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-      );
-    }
+    final name = controller.resolveSenderDisplayName(message);
+    if (name == null || name.isEmpty) return bubble;
 
-    if (type == 'document') {
-      final doc = decoded['document'];
-      final link = doc?['link']?.toString() ?? '';
-      return DocumentMessageUi(
-        documentFile: link,
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        rightMargin: 0,
-        leftMargin: mediaQuery.height * 0.06,
-        isInTemplate: false,
-        isLocal: false,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-      );
-    }
-
-    if (type == 'image') {
-      final img = decoded['image'];
-      final link = img?['link']?.toString() ?? '';
-      final caption = img?['caption']?.toString() ?? '';
-      return ImageMessageUi(
-        imageFile: null,
-        imageUrl: link,
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        rightMargin: 10.0,
-        leftMargin: 10.0,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-        caption: caption,
-      );
-    }
-
-    if (type == 'video') {
-      final vid = decoded['video'];
-      final link = vid?['link']?.toString() ?? '';
-      return VideoMessageUi(
-        videoUrl: link,
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        rightMargin: 0,
-        leftMargin: mediaQuery.height * 0.06,
-        isInTemplate: false,
-        isLocal: false,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-      );
-    }
-
-    if (type == 'interactive') {
-      final interactive = decoded['interactive'];
-      final bodyText = interactive?['body']?['text']?.toString() ?? '';
-      final buttons = interactive?['action']?['buttons'] as List? ?? [];
-      return BaseMessageUi(
-        isSentByMe: message.sender == 1 ? false : true,
-        createdAt: message.createdAt,
-        mediaQuery: mediaQuery,
-        deliveryStatus: message.deliveryStatus ?? "sent",
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (bodyText.isNotEmpty)
-              SelectableText(bodyText,
-                  style: const TextStyle(color: Colors.black87)),
-            if (buttons.isNotEmpty) ...[
-              const Divider(height: 20, thickness: 1, color: Colors.grey),
-              ...buttons.map((btn) {
-                final title = btn['reply']?['title']?.toString() ?? '';
-                return TextButton(
-                  onPressed: () {},
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.touch_app, size: 16),
-                      const SizedBox(width: 8),
-                      Text(title),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        bubble,
+        Padding(
+          padding: const EdgeInsets.only(right: 20, top: 2, bottom: 2),
+          // Bounded to the same max width BaseMessageUi gives the bubble
+          // itself, so a long name truncates with "…" instead of running
+          // past the bubble's edge.
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: mediaQuery.width * 0.7),
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+            ),
+          ),
         ),
-      );
-    }
+      ],
+    );
+  }
 
-    // ✅ type == 'template' — messageText mein template JSON hai
-    if (type == 'template') {
-      return TempleteMessageUi(
-        templateData: message.templateData,
-        messageText: message.messageText,
+  Widget buildMessageWidget(Message message, Size mediaQuery) {
+    //   if (message.messageType == 'text') {
+    // return TextMessageUi(
+    //   text: message.messageText, // ← messageText ki jagah
+    //   isSentByMe: message.sender == 1 ? false : true,
+    //   createdAt: message.createdAt,
+    //   mediaQuery: mediaQuery,
+    //   deliveryStatus: message.deliveryStatus ?? "sent",
+    // );
+
+    //   }
+    // ✅ BAAD — parentheses se fix
+    if (message.messageType == 'text') {
+      String displayText = message.messageText;
+      try {
+        final decoded = jsonDecode(message.messageText);
+        final body = decoded['text']?['body']?.toString();
+        if (body != null && body.isNotEmpty) displayText = body;
+      } catch (_) {}
+      return TextMessageUi(
+        text: displayText,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
-        messageType: message.messageType,
-        senderName: '',
       );
-    }
+    } else if (message.messageType == 'template') {
+      // ✅ templateData hai — real template
+      if (message.templateData != null && message.templateData!.isNotEmpty) {
+        return TempleteMessageUi(
+          templateData: message.templateData,
+          messageText: message.messageText,
+          isSentByMe: message.sender == 1 ? false : true,
+          createdAt: message.createdAt,
+          mediaQuery: mediaQuery,
+          deliveryStatus: message.deliveryStatus ?? "sent",
+          messageType: message.messageType,
+          senderName: '',
+          isAutoreply: message.isAutoreply,
+        );
+      }
 
-  } catch (_) {}
+      // ✅ templateData null — short message type check karo
+      final msgText = message.messageText;
+      try {
+        final decoded = jsonDecode(msgText);
+        final type = decoded['type']?.toString() ?? '';
 
-  // fallback
-  return TextMessageUi(
-    text: msgText,
-    isSentByMe: message.sender == 1 ? false : true,
-    createdAt: message.createdAt,
-    mediaQuery: mediaQuery,
-    deliveryStatus: message.deliveryStatus ?? "sent",
-  );
-}
-    else if (message.messageType == 'image') {
+        if (type == 'text') {
+          final body = decoded['text']?['body']?.toString() ?? '';
+          return TextMessageUi(
+            text: body.isNotEmpty ? body : msgText,
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+          );
+        }
+
+        if (type == 'document') {
+          final doc = decoded['document'];
+          final link = doc?['link']?.toString() ?? '';
+          return DocumentMessageUi(
+            documentFile: link,
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            rightMargin: 0,
+            leftMargin: mediaQuery.height * 0.06,
+            isInTemplate: false,
+            isLocal: false,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+          );
+        }
+
+        if (type == 'image') {
+          final img = decoded['image'];
+          final link = img?['link']?.toString() ?? '';
+          final caption = img?['caption']?.toString() ?? '';
+          return ImageMessageUi(
+            imageFile: null,
+            imageUrl: link,
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            rightMargin: 10.0,
+            leftMargin: 10.0,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+            caption: caption,
+          );
+        }
+
+        if (type == 'video') {
+          final vid = decoded['video'];
+          final link = vid?['link']?.toString() ?? '';
+          return VideoMessageUi(
+            videoUrl: link,
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            rightMargin: 0,
+            leftMargin: mediaQuery.height * 0.06,
+            isInTemplate: false,
+            isLocal: false,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+          );
+        }
+
+        if (type == 'interactive') {
+          final interactive = decoded['interactive'];
+          final bodyText = interactive?['body']?['text']?.toString() ?? '';
+          final buttons = interactive?['action']?['buttons'] as List? ?? [];
+          return BaseMessageUi(
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (bodyText.isNotEmpty)
+                  SelectableText(bodyText,
+                      style: const TextStyle(color: Colors.black87)),
+                if (buttons.isNotEmpty) ...[
+                  const Divider(height: 20, thickness: 1, color: Colors.grey),
+                  ...buttons.map((btn) {
+                    final title = btn['reply']?['title']?.toString() ?? '';
+                    return TextButton(
+                      onPressed: () {},
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.touch_app, size: 16),
+                          const SizedBox(width: 8),
+                          Text(title),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ],
+            ),
+          );
+        }
+
+        // ✅ type == 'template' — messageText mein template JSON hai
+        if (type == 'template') {
+          return TempleteMessageUi(
+            templateData: message.templateData,
+            messageText: message.messageText,
+            isSentByMe: message.sender == 1 ? false : true,
+            createdAt: message.createdAt,
+            mediaQuery: mediaQuery,
+            deliveryStatus: message.deliveryStatus ?? "sent",
+            messageType: message.messageType,
+            senderName: '',
+            isAutoreply: message.isAutoreply,
+          );
+        }
+      } catch (_) {}
+
+      // fallback
+      return TextMessageUi(
+        text: msgText,
+        isSentByMe: message.sender == 1 ? false : true,
+        createdAt: message.createdAt,
+        mediaQuery: mediaQuery,
+        deliveryStatus: message.deliveryStatus ?? "sent",
+      );
+    } else if (message.messageType == 'image') {
       return ImageMessageUi(
         imageFile: message.local ? File(message.messageText) : null,
         imageUrl: message.local
@@ -637,8 +716,7 @@ if (message.messageType == 'text') {
         mediaQuery: mediaQuery,
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
-    } else if (message.messageType == 'interactive' &&
-        message.hasCallHistory) {
+    } else if (message.messageType == 'interactive' && message.hasCallHistory) {
       // A voice-call-related "interactive" message (e.g. a call-permission
       // reply) that also carries callHistory data — show the call log UI
       // instead of the generic interactive-reply UI. Covers both call
@@ -664,19 +742,68 @@ if (message.messageType == 'text') {
         deliveryStatus: message.deliveryStatus ?? "sent",
         messageType: message.messageType,
         senderName: profile.profileName,
+        isAutoreply: message.isAutoreply,
       );
     } else if (message.messageType == 'reply_msg') {
       var isInJson = isJson(message.messageText);
       if (isInJson) {
         final messageData = jsonDecode(message.messageText);
-        var replyText = messageData['text']?['body'] ?? "No reply text";
+        // The app's own replies carry text.body; a reply sent from the web
+        // app instead carries a flat {content_send_type, msgcontent,
+        // message_id} shape with the reply text under msgcontent and no
+        // replyformsg (no quoted-message data) — fall back to that instead
+        // of showing "No reply text" for every web-originated reply.
+        var replyText = messageData['text']?['body'] ??
+            messageData['msgcontent'] ??
+            "No reply text";
+
+        // replyformsg (the quoted-preview snapshot) only exists on the
+        // LOCAL optimistic message right after sending — a reload from
+        // history doesn't carry it back (the server's reply_to block isn't
+        // in the fetchcustomerchat list response, only in sendReplyChat's
+        // own immediate response). Fall back to looking the original
+        // message up by id in the currently-loaded chat, so the quoted box
+        // still shows after leaving and reopening the chat.
+        String replyFormData = message.replyformsg ?? '';
+        final quotedMessageId = messageData['message_id']?.toString();
+        final controller = Get.find<MessagesPageController>();
+        if (replyFormData.isEmpty) {
+          if (quotedMessageId != null && quotedMessageId.isNotEmpty) {
+            final chatList = controller.messageChatList;
+            final index =
+                chatList.indexWhere((m) => m.messageId == quotedMessageId);
+            if (index != -1) {
+              final quoted = chatList[index];
+              replyFormData = jsonEncode({
+                'message_id': quoted.messageId,
+                'message_type': quoted.messageType,
+                'message_text': quoted.messageText,
+                'template_data': quoted.templateData,
+                'local': quoted.local,
+                'quoted_sender_name': controller.resolveQuotedSenderName(quoted),
+              });
+            } else {
+              // Not in the currently-loaded pages (common for notes/early
+              // templates, which tend to be older) — quietly load a few
+              // more pages in the background; once found, the reactive
+              // rebuild picks it up without the user needing to scroll.
+              controller.ensureMessageLoaded(quotedMessageId);
+            }
+          }
+        }
+
         return ReplyMessageUi(
           replyText: replyText,
           isSentByMe: message.sender == 1 ? false : true,
           createdAt: message.createdAt,
           mediaQuery: mediaQuery,
           deliveryStatus: message.deliveryStatus ?? "sent",
-          replyFormData: message.replyformsg!,
+          replyFormData: replyFormData,
+          onTapQuoted: (id) => controller.scrollToMessage(id),
+          unresolvedQuotedMessageId:
+              replyFormData.isEmpty ? quotedMessageId : null,
+          onRetryLoadQuoted: (id) =>
+              controller.ensureMessageLoaded(id, forceRetry: true),
         );
       } else {
         /*  final mess =
@@ -731,7 +858,11 @@ if (message.messageType == 'text') {
         deliveryStatus: message.deliveryStatus ?? "sent",
       );
     } else if (message.messageType == 'note') {
-      return NoteMessageUi(message: message, mediaQuery: mediaQuery);
+      return NoteMessageUi(
+        message: message,
+        mediaQuery: mediaQuery,
+        controller: Get.find<MessagesPageController>(),
+      );
     } else {
       // Unrecognized messageType (e.g. an auto-generated/system message
       // whose type isn't one of the cases above) used to render as a
@@ -800,8 +931,7 @@ if (message.messageType == 'text') {
                     quotedPreview,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style:
-                        TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                   ),
                 ),
               SelectableText(
@@ -853,23 +983,25 @@ if (message.messageType == 'text') {
       return false; // Return false if decoding fails
     }
   }
-Widget _templateRow(String label, String value) {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 2),
-    child: RichText(
-      text: TextSpan(
-        style: const TextStyle(fontSize: 13, color: Colors.black87),
-        children: [
-          TextSpan(
-            text: '$label: ',
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-          TextSpan(text: value),
-        ],
+
+  Widget _templateRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: RichText(
+        text: TextSpan(
+          style: const TextStyle(fontSize: 13, color: Colors.black87),
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
+            TextSpan(text: value),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
+
 //------------------------------------------------------------thumbnail-------------
   Future<File?> generateVideoThumbnail(String url) async {
     try {
@@ -962,195 +1094,284 @@ void _openBottomSheet(BuildContext context) {
   });
 }
 
-Widget _buildInputField(
-    MessagesPageController messagesPageController,
-    var profileWaKey,
-    Size mediaQuery,
-    BuildContext context) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8),
-    color: Colors.white,
-    child: Row(
-      children: [
-        IconButton(
-          icon: const Icon(Icons.add_circle),
-          onPressed: () {
-            Get.bottomSheet(
-              elevation: 0,
-              backgroundColor: Colors.transparent,
-              SafeArea(
-                child: Container(
-                  margin: const EdgeInsets.all(10),
-                  child: Card(
-                    elevation: 8,
-                    shadowColor: Colors.black54,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: mediaQuery.width * 0.05,
-                        vertical: mediaQuery.height * 0.02,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            "Attachments",
-                            style: TextStyle(
-                              fontSize: mediaQuery.width * 0.042,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey[800],
-                            ),
-                          ),
-                          SizedBox(height: mediaQuery.height * 0.02),
-                          GridView.count(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            crossAxisCount: 3,
-                            crossAxisSpacing: mediaQuery.width * 0.03,
-                            mainAxisSpacing: mediaQuery.height * 0.015,
-                            // ✅ Responsive childAspectRatio
-                            childAspectRatio:
-                                mediaQuery.width / (mediaQuery.height * 0.28),
-                            children: [
-                              IconBottomSheet(
-                                text: "Image",
-                                icon: Icons.insert_photo,
-                                backgroundColor: Colors.green,
-                                onTap: () {
-                                  Get.back();
-                                  messagesPageController.pickMediaOrDocument(
-                                    ImageSource.gallery,
-                                    messagesPageController.profileWaKey,
-                                    isImage: true,
-                                  );
-                                },
-                              ),
-                              IconBottomSheet(
-                                text: "Video",
-                                icon: Icons.videocam,
-                                backgroundColor: Colors.pink,
-                                onTap: () {
-                                  Get.back();
-                                  messagesPageController.pickMediaOrDocument(
-                                    ImageSource.gallery,
-                                    messagesPageController.profileWaKey,
-                                    isVideo: true,
-                                  );
-                                },
-                              ),
-                              IconBottomSheet(
-                                text: "Template",
-                                icon: Icons.format_align_justify,
-                                backgroundColor: Colors.blue,
-                                onTap: () {
-                                  showSendTemplateBottomSheet();
-                                },
-                              ),
-                              IconBottomSheet(
-                                text: "Document",
-                                icon: Icons.insert_drive_file,
-                                backgroundColor: Colors.grey,
-                                onTap: () {
-                                  Get.back();
-                                  messagesPageController.pickMediaOrDocument(
-                                    ImageSource.gallery,
-                                    messagesPageController.profileWaKey,
-                                    isDocument: true,
-                                  );
-                                },
-                              ),
-                              IconBottomSheet(
-                                text: "Shortcut Message",
-                                icon: Icons.flash_on,
-                                backgroundColor: Colors.orange,
-                                onTap: () {
-                                  Get.back();
-                                  Future.delayed(
-                                    const Duration(milliseconds: 300),
-                                    () => ShortMessageSheet.show(
-                                        messagesPageController),
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          SizedBox(height: mediaQuery.height * 0.01),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-        Expanded(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: mediaQuery.height * 0.15,
+Widget _buildInputField(MessagesPageController messagesPageController,
+    var profileWaKey, Size mediaQuery, BuildContext context) {
+  void openAttachmentSheet() {
+    Get.bottomSheet(
+      elevation: 0,
+      backgroundColor: Colors.transparent,
+      SafeArea(
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          child: Card(
+            elevation: 8,
+            shadowColor: Colors.black54,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            child: ValueListenableBuilder<TextEditingValue>(
-              valueListenable: messagesPageController.textEditingController,
-              builder: (context, value, child) {
-                return TextField(
-                  controller: messagesPageController.textEditingController,
-                  keyboardType: TextInputType.multiline,
-                  maxLines: 5,
-                  minLines: 1,
-                  enableInteractiveSelection: true,
-                  selectionControls: MaterialTextSelectionControls(),
-                  toolbarOptions: const ToolbarOptions(
-                    copy: true,
-                    paste: true,
-                    cut: true,
-                    selectAll: true,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'Type a message here....',
-                    hintStyle: const TextStyle(color: AppTheme.black54),
-                    filled: true,
-                    fillColor: Colors.white,
-                    suffixIcon: value.text.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.close,
-                                color: AppTheme.black54, size: 20),
-                            onPressed: () =>
-                                messagesPageController.textEditingController
-                                    .clear(),
-                          ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20.0),
-                      borderSide: const BorderSide(color: AppTheme.greyColor),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(7.0),
-                      borderSide: const BorderSide(color: AppTheme.greyColor),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(20.0),
-                      borderSide: BorderSide(color: AppTheme.boarderColor),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: mediaQuery.width * 0.05,
+                vertical: mediaQuery.height * 0.02,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    "Attachments",
+                    style: TextStyle(
+                      fontSize: mediaQuery.width * 0.042,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
                     ),
                   ),
-                );
-              },
+                  SizedBox(height: mediaQuery.height * 0.02),
+                  GridView.count(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisCount: 3,
+                    crossAxisSpacing: mediaQuery.width * 0.03,
+                    mainAxisSpacing: mediaQuery.height * 0.015,
+                    // ✅ Responsive childAspectRatio
+                    childAspectRatio:
+                        mediaQuery.width / (mediaQuery.height * 0.28),
+                    children: [
+                      IconBottomSheet(
+                        text: "Image",
+                        icon: Icons.insert_photo,
+                        backgroundColor: Colors.green,
+                        onTap: () {
+                          Get.back();
+                          messagesPageController.pickMediaOrDocument(
+                            ImageSource.gallery,
+                            messagesPageController.profileWaKey,
+                            isImage: true,
+                          );
+                        },
+                      ),
+                      IconBottomSheet(
+                        text: "Video",
+                        icon: Icons.videocam,
+                        backgroundColor: Colors.pink,
+                        onTap: () {
+                          Get.back();
+                          messagesPageController.pickMediaOrDocument(
+                            ImageSource.gallery,
+                            messagesPageController.profileWaKey,
+                            isVideo: true,
+                          );
+                        },
+                      ),
+                      IconBottomSheet(
+                        text: "Template",
+                        icon: Icons.format_align_justify,
+                        backgroundColor: Colors.blue,
+                        onTap: () {
+                          showSendTemplateBottomSheet();
+                        },
+                      ),
+                      IconBottomSheet(
+                        text: "Document",
+                        icon: Icons.insert_drive_file,
+                        backgroundColor: Colors.grey,
+                        onTap: () {
+                          Get.back();
+                          messagesPageController.pickMediaOrDocument(
+                            ImageSource.gallery,
+                            messagesPageController.profileWaKey,
+                            isDocument: true,
+                          );
+                        },
+                      ),
+                      IconBottomSheet(
+                        text: "Shortcut Message",
+                        icon: Icons.flash_on,
+                        backgroundColor: Colors.orange,
+                        onTap: () {
+                          Get.back();
+                          Future.delayed(
+                            const Duration(milliseconds: 300),
+                            () =>
+                                ShortMessageSheet.show(messagesPageController),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: mediaQuery.height * 0.01),
+                ],
+              ),
             ),
           ),
         ),
-        IconButton(
-          icon: const Icon(Icons.send),
-          onPressed: () {
-            messagesPageController
-                .sendMessage(messagesPageController.profileWaKey);
-          },
+      ),
+    );
+  }
+
+  return Column(
+  mainAxisSize: MainAxisSize.min,
+  children: [
+    Obx(() {
+      final replyMsg = messagesPageController.replyingToMessage.value;
+      if (replyMsg == null) return const SizedBox.shrink();
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF0F1F3),
+          borderRadius: BorderRadius.circular(10),
+          border: const Border(
+              left: BorderSide(color: Colors.green, width: 4)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                      'Replying to ${messagesPageController.resolveQuotedSenderName(replyMsg)}',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 12)),
+                  Text(
+                    replyMsg.previewText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 13, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: messagesPageController.cancelReply,
+            ),
+          ],
+        ),
+      );
+    }),
+  
+      Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    color: Colors.white,
+    child: Stack(
+      children: [
+        // Big rounded composer card — text starts at the top; extra bottom
+        // padding (44) reserves room for the "+" / send circles sitting
+        // inside its bottom corners, so growing text never runs under them.
+        Container(
+          width: double.infinity,
+          constraints: BoxConstraints(
+            minHeight: 72,
+            maxHeight: mediaQuery.height * 0.25,
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 44),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0F1F3),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: messagesPageController.textEditingController,
+            builder: (context, value, child) {
+              return TextField(
+                controller: messagesPageController.textEditingController,
+                focusNode: messagesPageController.textFieldFocusNode,
+                keyboardType: TextInputType.multiline,
+                maxLines: 6,
+                minLines: 1,
+                enableInteractiveSelection: true,
+                selectionControls: MaterialTextSelectionControls(),
+                // Slash-command style shortcut: typing "/" as the very
+                // first character (compose box was empty) opens the
+                // shortcut messages sheet, same as picking it from the "+"
+                // attachment menu. Clearing it here means the "/" never
+                // lingers whether a shortcut gets picked or the sheet is
+                // dismissed without choosing one.
+                onChanged: (text) {
+                  if (text == '/') {
+                    messagesPageController.textEditingController.clear();
+                    ShortMessageSheet.show(messagesPageController);
+                  }
+                },
+                toolbarOptions: const ToolbarOptions(
+                  copy: true,
+                  paste: true,
+                  cut: true,
+                  selectAll: true,
+                ),
+                style: const TextStyle(fontSize: 15, color: Colors.black87),
+                decoration: InputDecoration(
+                  hintText: 'Type a message here....',
+                  hintStyle: const TextStyle(color: AppTheme.black54),
+                  isCollapsed: true,
+                  border: InputBorder.none,
+                  suffixIcon: value.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close,
+                              color: AppTheme.black54, size: 20),
+                          onPressed: () => messagesPageController
+                              .textEditingController.clear(),
+                        ),
+                ),
+              );
+            },
+          ),
+        ),
+
+        // "+" attachment button — inside the card's bottom-left corner.
+        Positioned(
+          left: 6,
+          bottom: 6,
+          child: Material(
+            color: Colors.white,
+            shape: const CircleBorder(
+              side: BorderSide(color: Color(0xFFE0E0E0)),
+            ),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: openAttachmentSheet,
+              child: const SizedBox(
+                width: 30,
+                height: 30,
+                child: Icon(Icons.add, color: Colors.black54, size: 16),
+              ),
+            ),
+          ),
+        ),
+
+        // Send button — inside the card's bottom-right corner.
+        Positioned(
+          right: 6,
+          bottom: 6,
+          child: Material(
+            color: AppTheme.authButtonColor,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () {
+                messagesPageController
+                    .sendMessage(messagesPageController.profileWaKey);
+              },
+              child: const SizedBox(
+                width: 30,
+                height: 30,
+                child: Icon(Icons.arrow_upward_rounded,
+                    color: Colors.white, size: 16),
+              ),
+            ),
+          ),
         ),
       ],
     ),
-  );
+  ),
+  ],
+);
 }
- 
+
+
 // ============================================================
 // IconBottomSheet — Fully Responsive
 // ============================================================
@@ -1159,7 +1380,7 @@ class IconBottomSheet extends StatelessWidget {
   final IconData icon;
   final Color backgroundColor;
   final VoidCallback onTap;
- 
+
   const IconBottomSheet({
     super.key,
     required this.text,
@@ -1167,44 +1388,46 @@ class IconBottomSheet extends StatelessWidget {
     required this.backgroundColor,
     required this.onTap,
   });
- 
+
   @override
   Widget build(BuildContext context) {
     final w = MediaQuery.of(context).size.width;
     final h = MediaQuery.of(context).size.height;
- 
+
     return InkWell(
-  onTap: onTap,
-  borderRadius: BorderRadius.circular(8),
-  child: FittedBox(        // ✅ ADD FittedBox
-    fit: BoxFit.scaleDown,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        CircleAvatar(
-          radius: w * 0.07,
-          backgroundColor: backgroundColor,
-          child: Icon(icon, size: w * 0.06, color: Colors.white),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: FittedBox(
+        // ✅ ADD FittedBox
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            CircleAvatar(
+              radius: w * 0.07,
+              backgroundColor: backgroundColor,
+              child: Icon(icon, size: w * 0.06, color: Colors.white),
+            ),
+            SizedBox(height: h * 0.008),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: w * 0.032,
+                color: Colors.grey[800],
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
-        SizedBox(height: h * 0.008),
-        Text(
-          text,
-          style: TextStyle(
-            fontSize: w * 0.032,
-            color: Colors.grey[800],
-          ),
-          textAlign: TextAlign.center,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ],
-    ),
-  ),
-);
+      ),
+    );
   }
 }
+
 void _showCallOptionsBottomSheet(BuildContext context, String phoneNumber) {
   Get.bottomSheet(
     Container(

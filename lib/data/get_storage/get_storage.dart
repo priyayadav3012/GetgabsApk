@@ -328,6 +328,36 @@ Future<String> getApiKey() async {
     }
   }
 
+  /// The display name of the account that OWNS this WhatsApp number — the
+  /// "admin"/top-level account, as opposed to any sub-user (teammate) login.
+  /// Two shapes, both seen in real login responses:
+  ///  - A top-level (parent_user_id == 0/empty) login IS the admin account
+  ///    itself, so its own top-level `name` field is the answer.
+  ///  - A sub-user login has a real parent_user_id, and the server nests the
+  ///    owner's info under `getadmininfo` (populated only for sub-users —
+  ///    it's `null` on the admin's own login) — read `name` from there.
+  Future<String> getAdminName() async {
+    final box = GetStorage();
+    await box.initStorage;
+    final storedDataJson = box.read('responseData');
+    if (storedDataJson == null) return '';
+    try {
+      final Map<String, dynamic> storedData = json.decode(storedDataJson);
+      final parentUserId = storedData['parent_user_id']?.toString() ?? '';
+      if (parentUserId.isEmpty || parentUserId == '0') {
+        return storedData['name']?.toString() ?? '';
+      }
+      final adminInfo = storedData['getadmininfo'];
+      if (adminInfo is Map) {
+        return adminInfo['name']?.toString() ?? '';
+      }
+      return '';
+    } catch (e) {
+      debugPrint('❌ Error parsing getAdminName: $e');
+      return '';
+    }
+  }
+
 
   // Future<int> getLoginWithMobileNumberUser() async {
   //   final box = GetStorage();

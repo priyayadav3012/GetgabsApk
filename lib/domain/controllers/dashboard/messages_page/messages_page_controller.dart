@@ -23,6 +23,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../ui/pages/dashboard/chats/templates_folder/carousal/header_selection_controller.dart';
 import '../../../../ui/res/utils/utils.dart';
+import '../../../../ui/themes/themes.dart';
 
 class MessagesPageController extends GetxController {
   var isSearching = false.obs;
@@ -32,6 +33,208 @@ class MessagesPageController extends GetxController {
  
   final ChatServices chatServices = ChatServices();
   GetStorageUserData userData = GetStorageUserData();
+
+  // Sub-user (teammate) id -> display name, resolved from the same
+  // "Assign to teammate" executive list — lets a sent message's
+  // subuserSenderId be shown as the sender's name on the bubble, WATI/
+  // Interakt-style, without the backend needing to add a name field to
+  // every message payload.
+  Map<int, String> agentNamesById = {};
+
+  // The account-owning admin's own name (see GetStorageUserData.getAdminName)
+  // — covers the one sender the executive list never contains: the owner
+  // account itself, when it sends a message directly rather than via a
+  // sub-user login.
+  String adminName = '';
+
+  // adminName resolves from local storage almost instantly, while
+  // agentNamesById needs a network round-trip — without this flag, the
+  // sender-name UI would treat that gap as "no teammate matched" and
+  // wrongly flash the admin's name on every teammate's message until the
+  // executive list finishes loading. Sender-name attribution (other than
+  // "You", which never depends on this) waits for this to flip true.
+  bool agentNamesLoaded = false;
+
+  Future<void> _fetchAgentNames() async {
+    try {
+      adminName = await userData.getAdminName();
+    } catch (e) {
+      debugPrint('❌ getAdminName error: $e');
+    }
+
+    try {
+      final dc = Get.find<DashboardController>();
+      final token = await dc.getPartnerSessionToken();
+      if (token != null && token.isNotEmpty) {
+        final response = await chatServices.fetchExecutiveListService(token);
+        if (response['status'] == true) {
+          final list = response['ExecutiveList'] as List? ?? [];
+          final Map<int, String> names = {};
+          for (final u in list) {
+            final id = int.tryParse(u['id'].toString());
+            final name = u['name']?.toString() ?? '';
+            if (id != null && name.isNotEmpty) names[id] = name;
+          }
+          agentNamesById = names;
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ fetchAgentNames error: $e');
+    }
+
+    agentNamesLoaded = true;
+    // groupedMessages itself is unchanged — refresh() just re-notifies its
+    // listeners so the message list's Obx rebuilds and picks up the names.
+    groupedMessages.refresh();
+  }
+
+  // Shared by the chat bubble's "You"/teammate-name attribution and the
+  // Team Note card's header name — "You" when it's the currently logged-in
+  // user's own message; else the teammate's name via the executive list;
+  // else — the server only fills subuserSenderId for actual SUB-USER sends,
+  // leaving it null/-1 for the admin/primary account's own sends — treat
+  // "no sub-user matched" as "the admin sent this", showing "You" if the
+  // viewer themself is that admin account, otherwise the admin's name.
+  // Returns null while the executive list is still loading (rather than
+  // guessing "admin" and flipping to the real name a moment later) or when
+  // the message wasn't sent by this account at all.
+  String? resolveSenderDisplayName(Message message) {
+    if (!message.isSentByMe) return null;
+    final isMe =
+        message.subuserSenderId != null && message.subuserSenderId == userId;
+    if (isMe) return 'You';
+    if (!agentNamesLoaded) return null;
+
+    final teammateName = agentNamesById[message.subuserSenderId];
+    if (teammateName != null && teammateName.isNotEmpty) return teammateName;
+
+    final viewerIsAdmin = adminId.isEmpty || adminId == '0';
+    final name = viewerIsAdmin ? 'You' : adminName;
+    return name.isEmpty ? null : name;
+  }
+
+  // The label shown above a QUOTED message inside a reply's little preview
+  // box (WhatsApp-style: "You" / teammate name / customer name). A quoted
+  // customer-sent message has no subuserSenderId to resolve — it's just
+  // the chat's own customer, so use the profile name directly instead of
+  // resolveSenderDisplayName (which only makes sense for our own sends).
+  String resolveQuotedSenderName(Message quoted) {
+    if (!quoted.isSentByMe) {
+      final name = userProfile.value.profileName;
+      return name.isNotEmpty ? name : 'Customer';
+    }
+    return resolveSenderDisplayName(quoted) ?? 'Reply';
+  }
+
+  // Tap-to-scroll (WhatsApp-style: tapping a reply's quoted preview jumps
+  // to the original message). Each message row registers a GlobalKey
+  // here as it builds (see messages_page.dart's itemBuilder); scrolling
+  // only works while that key's context is actually mounted — a message
+  // far enough away to not be built yet (e.g. on an unloaded older page)
+  // can't be jumped to without a positioned-list package, so that case is
+  // reported rather than silently doing nothing.
+  final Map<String, GlobalKey> _messageKeys = {};
+
+  GlobalKey keyForMessage(String messageId) {
+    return _messageKeys.putIfAbsent(messageId, () => GlobalKey());
+  }
+
+  // Briefly highlighted after a successful scroll-to-quoted-message (see
+  // scrollToMessage), read by the message row wrapper to flash a
+  // background tint — the same "found it" cue WhatsApp gives. Not tied to
+  // a plain tap on any message — only tapping a reply's quoted box (which
+  // scrolls to the original) triggers this.
+  var highlightedMessageId = ''.obs;
+
+  // Guards against overlapping ensureVisible animations — tapping again
+  // while one is still running is what made repeated taps feel
+  // inconsistent (a second animation starting mid-flight fights the
+  // first one instead of just being ignored).
+  bool _isScrollingToMessage = false;
+
+  Future<void> scrollToMessage(String messageId) async {
+    if (_isScrollingToMessage) return;
+
+    // TEMP DEBUG — remove once the "notes don't scroll" mystery is solved.
+    debugPrint('🔎 scrollToMessage: looking for "$messageId"');
+    debugPrint('🔎 scrollToMessage: known keys = ${_messageKeys.keys.toList()}');
+    debugPrint('🔎 scrollToMessage: messageChatList ids = '
+        '${messageChatList.map((m) => "${m.messageType}:${m.messageId}").toList()}');
+
+    final context = _messageKeys[messageId]?.currentContext;
+    if (context == null) {
+      Get.snackbar(
+        '',
+        '',
+        titleText: const SizedBox.shrink(),
+        messageText: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: AppTheme.appThemeColor.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.search_off_rounded,
+                color: AppTheme.appThemeColor,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                "Message isn't loaded yet — scroll up to find it",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w500,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
+        ),
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: const Color(0xFF2B2B2B),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        borderRadius: 14,
+        duration: const Duration(seconds: 2),
+        forwardAnimationCurve: Curves.easeOutCubic,
+        reverseAnimationCurve: Curves.easeInCubic,
+        animationDuration: const Duration(milliseconds: 280),
+        boxShadows: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      );
+      return;
+    }
+
+    _isScrollingToMessage = true;
+    try {
+      await Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeInOut,
+        alignment: 0.5,
+      );
+
+      highlightedMessageId.value = messageId;
+      Future.delayed(const Duration(milliseconds: 1200), () {
+        if (highlightedMessageId.value == messageId) {
+          highlightedMessageId.value = '';
+        }
+      });
+    } finally {
+      _isScrollingToMessage = false;
+    }
+  }
+
   var isDropdownExpanded = false.obs;
 final TextEditingController headerTextController = TextEditingController();
   // User info - initialized in onInit
@@ -299,7 +502,11 @@ final TextEditingController headerTextController = TextEditingController();
 
   final ScrollController scrollController = ScrollController();
 
-  late SocketsController _socketsController;
+  // Socket.IO retired for chat (see DashboardBinding) — no longer registered,
+  // so this stays null and every use below is guarded accordingly. New
+  // messages now arrive via FCM (NotificationService.firebaseInit()), which
+  // delivers directly into the open chat the same way this used to.
+  SocketsController? _socketsController;
 
   @override
   void onInit() {
@@ -312,7 +519,7 @@ final TextEditingController headerTextController = TextEditingController();
     // the chat unregistered and live delivery silently dead.)
     if (Get.isRegistered<SocketsController>()) {
       _socketsController = Get.find<SocketsController>();
-      _socketsController.registerOpenChat(this);
+      _socketsController?.registerOpenChat(this);
     } else {
       debugPrint('SocketsController not registered when opening chat!');
     }
@@ -343,18 +550,16 @@ final TextEditingController headerTextController = TextEditingController();
       // Step 3: Load chats and templates
       await loadChatsApi(userKey: profileWaKey, from: 'outside');
       fetchMessageTemplates();
+      _fetchAgentNames();
 
       scrollController.addListener(_scrollListener);
       messageChatList.listen((_) {
         groupedMessages.assignAll(groupMessagesByDate(messageChatList));
       });
 
-      // Open-chat registration already happened synchronously in onInit.
-      // SocketsController owns the single 'chatdata'/'messagestatus' listeners
-      // and routes events straight to this controller; we no longer call
-      // socket.on() per-page (that leaked listeners and broke live delivery).
-      _socketsController = Get.find<SocketsController>();
-      _socketsController.registerOpenChat(this);
+      // Open-chat registration already happened synchronously in onInit
+      // (guarded there — SocketsController may not be registered at all now
+      // that chat has moved to FCM).
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         var dc = Get.find<DashboardController>();
@@ -561,7 +766,30 @@ void toggleAiPause() async {
       isAiToggleLoading.value = false;
     }
   }
-  
+
+  var isUpdatingCustomerName = false.obs;
+
+  /// Renames the customer whose chat is currently open — delegates to
+  /// DashboardController so the chat list (active/rolling-over) picks up
+  /// the new name too, then reflects it on this screen's own header.
+  Future<bool> updateCustomerName(String newName) async {
+    if (isUpdatingCustomerName.value) return false;
+    isUpdatingCustomerName.value = true;
+    try {
+      if (!Get.isRegistered<DashboardController>()) return false;
+      final ok = await Get.find<DashboardController>().updateCustomerName(
+        profileWaKey: profileWaKey,
+        newName: newName,
+      );
+      if (ok) {
+        userProfile.value = userProfile.value.copyWith(profileName: newName);
+      }
+      return ok;
+    } finally {
+      isUpdatingCustomerName.value = false;
+    }
+  }
+
  var shortMessages = <Map<String, dynamic>>[].obs;
 var isShortMessagesLoading = false.obs;
 var shortMessagesError = ''.obs;
@@ -633,14 +861,47 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
         debugPrint('📱 New message received from: ${messageData['profile_wa_key']}');
         var receivedMessage = Message.fromJson(messageData);
 
+        // The backend re-sends the SAME message over FCM as its
+        // delivery_status progresses (sent → delivered → read), not just
+        // for genuinely new messages — this same messageId is what
+        // keyForMessage() caches one GlobalKey for, so blindly re-inserting
+        // it as a second row would hand two widgets the same GlobalKey
+        // ("Multiple widgets used the same GlobalKey", thrown repeatedly).
+        // So: if it's already in the list, this is a status update — apply
+        // it in place instead of ignoring it, which is what made read/
+        // delivered ticks depend entirely on the slower 3-second REST
+        // resync fallback instead of updating instantly off this push.
+        final existingIndex = messageChatList
+            .indexWhere((m) => m.messageId == receivedMessage.messageId);
+        if (existingIndex != -1) {
+          final current = messageChatList[existingIndex];
+          if (current.deliveryStatus?.toLowerCase() !=
+              receivedMessage.deliveryStatus?.toLowerCase()) {
+            messageChatList[existingIndex] = current.copyWith(
+              deliveryStatus: receivedMessage.deliveryStatus,
+            );
+            groupedMessages.assignAll(groupMessagesByDate(messageChatList));
+            debugPrint('✅ Status updated live for '
+                '${receivedMessage.messageId}: ${receivedMessage.deliveryStatus}');
+          }
+          return;
+        }
+
         // Insert the new message at the beginning of the list
         messageChatList.insert(0, receivedMessage);
         groupedMessages.assignAll(groupMessagesByDate(messageChatList));
 
-if (Get.isRegistered<DashboardController>()) {
-          final dc = Get.find<DashboardController>();
-          dc.markChatAsRead(profileWaKey);
-          dc.refreshActiveChatList(increment: 'replace');
+        // markChatAsRead is a local list update (no network call) — the
+        // dashboard row's unread badge was already bumped by
+        // bumpChatOnIncomingMessage() before this ran, so this only needs
+        // to zero it back out since this chat is open. A REST-refetch
+        // refreshActiveChatList() call used to sit here too, re-fetching
+        // and replacing the *entire* dashboard chat list on every single
+        // incoming message while this chat was open — same "poori list
+        // update ho rahi hai" issue fixed elsewhere, just a second spot it
+        // was still happening from.
+        if (Get.isRegistered<DashboardController>()) {
+          Get.find<DashboardController>().markChatAsRead(profileWaKey);
         }
 
         // Mark message as read IMMEDIATELY using cached user info
@@ -653,7 +914,7 @@ if (Get.isRegistered<DashboardController>()) {
           return; // Skip emit if adminId is not ready
         }
         
-        _socketsController.updateChatToRead(
+        _socketsController?.updateChatToRead(
             role: role,
             userId: userId,
             adminId: adminId,
@@ -681,7 +942,7 @@ if (Get.isRegistered<DashboardController>()) {
   Future<void> markMessageAsReadImmediately(String messageId) async {
     try {
       debugPrint('⚡ Marking message $messageId as read IMMEDIATELY');
-      _socketsController.updateChatToRead(
+      _socketsController?.updateChatToRead(
         role: role,
         userId: userId,
         adminId: adminId,
@@ -712,7 +973,12 @@ if (Get.isRegistered<DashboardController>()) {
 
     if (index != -1) {
       if (data['data']['message_type'] == "template") {
-        messageChatList[index] = Message.fromJson(data['data']);
+        // Keep the subuser id we already know locally — the server's
+        // status payload doesn't always carry it (e.g. the admin's own
+        // sends), which broke "You"/sender-name attribution otherwise.
+        final existingSubuserSenderId = messageChatList[index].subuserSenderId;
+        messageChatList[index] = Message.fromJson(data['data'])
+            .copyWith(subuserSenderId: existingSubuserSenderId);
       } else {
         // Normalize the status to lowercase for consistency
         final normalizedStatus = deliveryStatus?.toString().toLowerCase() ?? 'sent';
@@ -733,6 +999,12 @@ if (Get.isRegistered<DashboardController>()) {
     }
   }
 
+  // Shows the WhatsApp-style "jump to latest" button once the user has
+  // scrolled away from the newest message — in this reverse:true list that
+  // means AWAY from pixel offset 0, not maxScrollExtent (which is the
+  // OLDEST end, already used above for pagination).
+  var showJumpToLatest = false.obs;
+
   void _scrollListener() {
     if (scrollController.position.pixels >=
         scrollController.position.maxScrollExtent - 50) {
@@ -740,6 +1012,20 @@ if (Get.isRegistered<DashboardController>()) {
         loadMoreMessages(profileWaKey);
       }
     }
+
+    final shouldShowJump = scrollController.position.pixels > 200;
+    if (shouldShowJump != showJumpToLatest.value) {
+      showJumpToLatest.value = shouldShowJump;
+    }
+  }
+
+  Future<void> jumpToLatestMessage() async {
+    if (!scrollController.hasClients) return;
+    await scrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOut,
+    );
   }
 
   void disposeScrollListner() {
@@ -790,6 +1076,10 @@ if (Get.isRegistered<DashboardController>()) {
             messageChatList.assignAll(
                 chatsList.map((datas) => Message.fromJson(datas)).toList());
           }
+          // An empty page means we've reached the start of the
+          // conversation — nothing older left to fetch for a quoted-message
+          // lookup, so stop trying instead of endlessly repaging.
+          hasMoreMessages = chatsList.isNotEmpty;
           currentPage++;
         } else {
           // print('2342342342343klkljlkjlkjlkjlkjlkjlkjl');
@@ -860,7 +1150,7 @@ if (Get.isRegistered<DashboardController>()) {
       // Send read status for each message immediately (no delays)
       for (var messageId in messagesToMarkAsRead) {
         debugPrint('⚡ Sending read status NOW for message: $messageId');
-        _socketsController.updateChatToRead(
+        _socketsController?.updateChatToRead(
           role: role,
           userId: userId,
           adminId: adminId,
@@ -882,6 +1172,75 @@ if (Get.isRegistered<DashboardController>()) {
         userKey:
             profileWaKey); // Replace 'your_user_key' with the actual user key
   }
+
+  // A reply's quoted-message lookup (see buildMessageWidget's 'reply_msg'
+  // branch) only searches messages already loaded into messageChatList —
+  // on a fresh chat open that's just the first page. Notes/early templates
+  // tend to be OLDER (created near the start of the conversation), so they
+  // miss that first page far more often than a recent text reply does,
+  // which is why "text works, template/note doesn't until I scroll up"
+  // happens: scrolling up is exactly what triggers loading those older
+  // pages. This auto-loads a few more pages in the background — bounded,
+  // so a genuinely missing/deleted message doesn't loop forever — instead
+  // of requiring the user to manually scroll to reveal the quoted box.
+  final Set<String> _autoLoadingQuotedFor = {};
+  final Set<String> _autoLoadExhaustedFor = {};
+
+  void ensureMessageLoaded(String messageId, {bool forceRetry = false}) {
+    if (_autoLoadingQuotedFor.contains(messageId)) return;
+    if (messageChatList.any((m) => m.messageId == messageId)) return;
+    if (forceRetry) {
+      // A manual retry tap should always get a fresh attempt — even if a
+      // previous automatic search gave up, or the conversation looked
+      // fully paged-through at the time.
+      _autoLoadExhaustedFor.remove(messageId);
+      hasMoreMessages = true;
+    } else if (_autoLoadExhaustedFor.contains(messageId)) {
+      return;
+    }
+    _autoLoadingQuotedFor.add(messageId);
+    _autoLoadUntilFound(messageId);
+  }
+
+  Future<void> _autoLoadUntilFound(String messageId) async {
+    // No fixed page cap — a quoted message replied to from way back in a
+    // long conversation should still resolve automatically. The real stop
+    // condition is reaching the actual start of the conversation
+    // (hasMoreMessages turns false); this ceiling only guards against a
+    // runaway loop if that never happens (e.g. a deleted message).
+    const maxExtraPages = 200;
+    try {
+      for (var i = 0; i < maxExtraPages; i++) {
+        if (messageChatList.any((m) => m.messageId == messageId)) return;
+        if (!hasMoreMessages) break;
+        // Don't fight the regular pagination/status-resync calls already
+        // in flight — wait a beat and check again instead of racing them.
+        var waited = 0;
+        while (isApiCallInProgress && waited < 2000) {
+          await Future.delayed(const Duration(milliseconds: 200));
+          waited += 200;
+        }
+        await loadChatsApi(userKey: profileWaKey);
+        if (messageChatList.any((m) => m.messageId == messageId)) return;
+      }
+      _autoLoadExhaustedFor.add(messageId);
+      // Nothing about groupedMessages itself changed, but the reply's
+      // quoted-box needs to re-check isQuotedMessageUnavailable now that
+      // the search has given up, so it can show an error instead of
+      // staying blank forever.
+      groupedMessages.refresh();
+    } finally {
+      _autoLoadingQuotedFor.remove(messageId);
+    }
+  }
+
+  // True once ensureMessageLoaded has searched maxExtraPages worth of
+  // history for this id and still come up empty — the quoted-preview box
+  // uses this to show "Original message not found" instead of staying
+  // blank forever while (from the user's point of view) nothing seems to
+  // be happening.
+  bool isQuotedMessageUnavailable(String messageId) =>
+      _autoLoadExhaustedFor.contains(messageId);
 
   /// Timestamp basis for our own optimistic (sent) messages that MATCHES how
   /// received messages are stored — [Message.fromJson] shifts the server's UTC
@@ -925,12 +1284,48 @@ if (Get.isRegistered<DashboardController>()) {
     return a.messageId.compareTo(b.messageId);
   }
 
+  // WhatsApp reactions arrive as their own message with message_type ==
+  // 'reaction' — the payload references the ORIGINAL message via
+  // reaction.message_id, not a message of its own. Strips those entries out
+  // of the displayed list and returns {targetMessageId: emoji} so the caller
+  // can attach the emoji to that message instead of showing raw reaction
+  // JSON as a separate bubble. An empty emoji means the reaction was removed.
+  Map<String, String> _extractReactions(List<Message> messages) {
+    final reactionEntries =
+        messages.where((m) => m.messageType == 'reaction').toList()
+          ..sort(_messageOrder);
+    final Map<String, String> reactionByTargetId = {};
+    for (final r in reactionEntries) {
+      try {
+        final decoded = jsonDecode(r.messageText);
+        final targetId = decoded['reaction']?['message_id']?.toString();
+        final emoji = decoded['reaction']?['emoji']?.toString() ?? '';
+        if (targetId == null || targetId.isEmpty) continue;
+        if (emoji.isEmpty) {
+          reactionByTargetId.remove(targetId);
+        } else {
+          reactionByTargetId[targetId] = emoji;
+        }
+      } catch (_) {}
+    }
+    return reactionByTargetId;
+  }
+
   Map<String, List<Message>> groupMessagesByDate(List<Message> messages) {
+    final reactionByTargetId = _extractReactions(messages);
+    final displayable = messages
+        .where((m) => m.messageType != 'reaction')
+        .map((m) {
+          final emoji = reactionByTargetId[m.messageId];
+          return emoji != null ? m.copyWith(reactionEmoji: emoji) : m;
+        })
+        .toList();
+
     // Order by the authoritative sequence (see _messageOrder) so the displayed
     // order never depends on the order socket events happened to arrive in — a
     // rapid burst of incoming/outgoing messages used to render out of sequence
     // because each was blindly inserted at index 0.
-    final sorted = List<Message>.from(messages)..sort(_messageOrder);
+    final sorted = List<Message>.from(displayable)..sort(_messageOrder);
 
     // Build each day's bucket oldest-first (top → bottom within the day).
     final Map<String, List<Message>> grouped = {};
@@ -956,19 +1351,63 @@ if (Get.isRegistered<DashboardController>()) {
 
   var textEditingController = TextEditingController();
 
+  // Swipe-to-reply state — set when the user swipes a message to reply to
+  // it (see SwipeToReplyWrapper), read by sendMessage() to decide whether
+  // to send a normal text message or a reply via sendReplyApi, and by the
+  // composer's "Replying to" preview bar.
+  Rx<Message?> replyingToMessage = Rx<Message?>(null);
+  final FocusNode textFieldFocusNode = FocusNode();
+
+  void startReply(Message message) {
+    replyingToMessage.value = message;
+    textFieldFocusNode.requestFocus();
+  }
+
+  void cancelReply() {
+    replyingToMessage.value = null;
+  }
+
   void sendMessage(String customerKey) {
     if (textEditingController.text.trim().isEmpty) {
       return;
     }
 
+    final repliedMessage = replyingToMessage.value;
     String tempMessageId =
         DateTime.now().millisecondsSinceEpoch.toString(); // Temporary ID
 
+    // A reply's messageText mirrors the sendReplyChat response shape
+    // ({"msgcontent": ..., "message_id": <quoted message's id>}) so the
+    // existing 'reply_msg' rendering path (see buildMessageWidget) picks it
+    // up the same way a reload from the server would.
+    final messageText = repliedMessage != null
+        ? jsonEncode({
+            'msgcontent': textEditingController.text,
+            'message_id': repliedMessage.messageId,
+          })
+        : textEditingController.text;
+
+    // Snapshot of the ORIGINAL message being replied to, in the shape
+    // ReplyMessageUi.buildReplyMessageWidget already expects — this is what
+    // draws the little quoted-message box above the reply text (WhatsApp-
+    // style). Without it the reply still sends fine, it just shows no
+    // quoted preview.
+    final replyFormSnapshot = repliedMessage != null
+        ? jsonEncode({
+            'message_id': repliedMessage.messageId,
+            'message_type': repliedMessage.messageType,
+            'message_text': repliedMessage.messageText,
+            'template_data': repliedMessage.templateData,
+            'local': repliedMessage.local,
+            'quoted_sender_name': resolveQuotedSenderName(repliedMessage),
+          })
+        : '';
+
     var newMessage = Message(
         id: 0, // 0 = optimistic (not yet server-confirmed); real id set on ack
-        messageText: textEditingController.text,
+        messageText: messageText,
         messageId: tempMessageId,
-        messageType: "text",
+        messageType: repliedMessage != null ? "reply_msg" : "text",
         isAutoreply: false,
         sender: 0,
         seenByAdmin: false,
@@ -977,7 +1416,11 @@ if (Get.isRegistered<DashboardController>()) {
         deliveryStatus: "sending", // Temporary status
         createdAt: _messageTimestampNow(),
         updatedAt: _messageTimestampNow(),
-        replyformsg: '');
+        replyformsg: replyFormSnapshot,
+        // Composed on THIS device by whoever is logged in right now — no
+        // need to wait for the server's subuser_sender_id to know who sent
+        // it, so the "You"/teammate-name attribution works immediately.
+        subuserSenderId: userId);
 
     messageChatList.insert(0, newMessage);
     groupedMessages.assignAll(groupMessagesByDate(messageChatList));
@@ -986,7 +1429,20 @@ if (Get.isRegistered<DashboardController>()) {
       Get.find<DashboardController>().bumpChatOnNewActivity(profileWaKey);
     }
 
-    sendMessageApi(customerKey, tempMessageId);
+    // Sending should always land you on what you just sent — if the user
+    // had scrolled up to older messages, the new one (inserted at the
+    // reverse:true list's position 0) would otherwise go unseen off the
+    // bottom of the screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      jumpToLatestMessage();
+    });
+
+    if (repliedMessage != null) {
+      sendReplyApi(customerKey, tempMessageId, repliedMessage.messageId);
+      cancelReply();
+    } else {
+      sendMessageApi(customerKey, tempMessageId);
+    }
   }
 
   void downloadMedia(Message message) async {
@@ -1038,7 +1494,7 @@ if (Get.isRegistered<DashboardController>()) {
         replyformsg: '',
         captionText: caption, // ✅ ✅ ✅ MOST IMPORTANT LINE
         // Temporarily set file path, replace with URL after upload
-        );
+        subuserSenderId: userId);
 
     messageChatList.insert(0, newMessage); // Insert at the beginning
 
@@ -1098,6 +1554,53 @@ if (Get.isRegistered<DashboardController>()) {
     }).onError((error, stackTrace) {});
   }
 
+  /// Sends a reply-to-a-specific-message via sendReplyChat instead of the
+  /// normal text-send endpoint. Mirrors sendMessageApi's shape (same
+  /// jsondata wrapper, same optimistic-message id swap on success) — see
+  /// the sendReplyChat API doc for the exact admin/sub-user payload.
+  Future<void> sendReplyApi(String customerKey, String tempMessageId,
+      String repliedMessageId) async {
+    final parentUserId = await userData.getParentUserId();
+    final currentUserId = await userData.getLoggedInUserId();
+    final apiKey = await userData.getApiKey();
+    final currentUserRole = await userData.getUserRole();
+    final userPrivilage = await userData.getUserPrivilage();
+
+    final msgContent = textEditingController.value.text.trim();
+
+    Map<String, dynamic> jsonData = {
+      "parent_user_id": parentUserId,
+      "current_user_id": currentUserId.toString(),
+      "api_key": apiKey,
+      "customer_key": customerKey,
+      "msgcontent": msgContent,
+      "message_id": repliedMessageId,
+      "current_user_role": currentUserRole,
+      "user_privilage": userPrivilage,
+    };
+    Map<String, dynamic> data = {"jsondata": jsonData};
+    textEditingController.clear();
+
+    Map<String, String> headers = {
+      "X-Client-GetGabs": apiKey.toString(),
+      "Content-Type": "application/json",
+    };
+
+    chatServices.sendReplyChatService(data, headers: headers).then((value) {
+      if (value['status'] == true) {
+        final actualMessageId =
+            value['message']['message_id']?.toString() ?? tempMessageId;
+        final serverId =
+            int.tryParse(value['message']['id']?.toString() ?? '');
+        updateMessageId(tempMessageId, actualMessageId, serverId: serverId);
+      } else {
+        debugPrint('❌ sendReplyApi failed: $value');
+      }
+    }).onError((error, stackTrace) {
+      debugPrint('❌ sendReplyApi error: $error');
+    });
+  }
+
   /// Parses a server timestamp string onto the SAME basis as received
   /// messages (see [Message.fromJson], which shifts UTC by +5:30), so all
   /// messages share one time basis and sort consistently.
@@ -1138,7 +1641,10 @@ if (Get.isRegistered<DashboardController>()) {
       final pending = _pendingStatusUpdates.remove(actualMessageId);
       if (pending != null) {
         if (pending['message_type'] == "template") {
-          messageChatList[index] = Message.fromJson(pending);
+          final existingSubuserSenderId =
+              messageChatList[index].subuserSenderId;
+          messageChatList[index] = Message.fromJson(pending)
+              .copyWith(subuserSenderId: existingSubuserSenderId);
         } else {
           final normalizedStatus =
               pending['delivery_status']?.toString().toLowerCase() ?? 'sent';
@@ -1248,7 +1754,8 @@ if (Get.isRegistered<DashboardController>()) {
         deliveryStatus: "sending", // Temporary status
         createdAt: _messageTimestampNow(),
         updatedAt: _messageTimestampNow(),
-        replyformsg: '');
+        replyformsg: '',
+        subuserSenderId: userId);
 
     messageChatList.insert(0, newMessage);
     groupedMessages.assignAll(groupMessagesByDate(messageChatList));
@@ -1263,7 +1770,14 @@ if (Get.isRegistered<DashboardController>()) {
     print('helllloworldddddd');
 
     if (index != -1) {
-      messageChatList[index] = Message.fromJson(json);
+      // The server's JSON doesn't carry subuser_sender_id for every sender
+      // (notably the admin's own sends) — keep the id we already know
+      // locally (whoever composed this message on THIS device) instead of
+      // losing it to the fresh parse, which broke "You"/sender-name
+      // attribution on the message's own live bubble.
+      final existingSubuserSenderId = messageChatList[index].subuserSenderId;
+      messageChatList[index] = Message.fromJson(json)
+          .copyWith(subuserSenderId: existingSubuserSenderId);
       print(messageChatList[index].messageText);
       print(actualMessageId);
       print('datatemplateeeee');
@@ -2124,6 +2638,7 @@ if (Get.isRegistered<DashboardController>()) {
     EasyLoading.dismiss();
     shouldContinue = false; // Stop any ongoing operations
     searchTemplateController.dispose(); // ADD THIS LINE
+    textFieldFocusNode.dispose();
 
     super.onClose();
   }

@@ -13,10 +13,13 @@ import 'package:flutter_callkit_incoming/entities/call_kit_params.dart';
 import 'package:flutter_callkit_incoming/entities/notification_params.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
+import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/end_points/api_end_points.dart';
+import 'package:getgabs/domain/services/notifications_service/chat_payload_parser.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:getgabs/firebase_options.dart';
 import 'package:getgabs/routes/app_page.dart';
@@ -27,6 +30,11 @@ import 'domain/services/whtasapp_calling_service.dart';
 
 final RouteObserver<ModalRoute<void>> routeObserver =
     RouteObserver<ModalRoute<void>>();
+
+// Queue of chats that pinged us via FCM while backgrounded, replayed as
+// local bumps on resume (see AppLifecycleObserver and
+// _firebaseMessagingBackgroundHandler below).
+const _kPendingBgChatBumpsKey = 'pending_bg_chat_bumps';
 
 // ✅ Dono platforms ke liye global flags
 bool isAppInForeground = true;
@@ -50,10 +58,60 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
         final prefs = await SharedPreferences.getInstance();
         if (prefs.getBool('has_new_messages_to_refresh') ?? false) {
           await prefs.setBool('has_new_messages_to_refresh', false);
+
+          // Replay each chat that pinged us while backgrounded as a local
+          // bump-to-top — mirrors exactly what the foreground FCM listener
+          // does live. Deliberately NOT a full REST "replace" here: the
+          // activeChatList/rollingOverChatList endpoints' own recency
+          // ordering lags behind what just happened, so replacing the list
+          // with a fresh fetch was overwriting a correctly-ordered list
+          // with a stale one (chats that had just been bumped to the top
+          // would vanish again on resume).
+          final pendingBumps = prefs.getStringList(_kPendingBgChatBumpsKey) ?? [];
+          await prefs.remove(_kPendingBgChatBumpsKey);
+
           if (Get.isRegistered<DashboardController>()) {
             final dc = Get.find<DashboardController>();
-            dc.refreshActiveChatList(increment: 'replace');
-            dc.refreshRollingOverChatList(increment: 'replace');
+            if (pendingBumps.isEmpty) {
+              // Flag was set but nothing decoded into a bump (malformed
+              // payload) — fall back to a real refresh so nothing is lost.
+              dc.refreshActiveChatList(increment: 'replace');
+              dc.refreshRollingOverChatList(increment: 'replace');
+            } else {
+              for (final raw in pendingBumps) {
+                try {
+                  final item = jsonDecode(raw) as Map<String, dynamic>;
+                  final key = item['profile_wa_key']?.toString();
+                  if (key == null) continue;
+                  dc.bumpChatOnIncomingMessage(
+                    profileWaKey: key,
+                    customerName: item['profile_name']?.toString() ?? 'Unknown',
+                    customerWaId:
+                        int.tryParse(item['profile_wa_id']?.toString() ?? '') ?? 0,
+                    isCurrentlyOpen: false,
+                    updatedTime: item['updated_time']?.toString(),
+                  );
+                } catch (e) {
+                  debugPrint('⚠️ Failed to replay queued bg chat bump: $e');
+                }
+              }
+            }
+          }
+
+          // The message that arrived while backgrounded may belong to
+          // whichever chat is currently open on screen — the dashboard
+          // refresh above only touches the outer chat list, not the open
+          // conversation's own messages, so without this the new message
+          // wouldn't show up until the chat was closed and reopened.
+          if (Get.isRegistered<MessagesPageController>()) {
+            final mc = Get.find<MessagesPageController>();
+            // loadChatsApi always fetches whatever page currentPage is set
+            // to, and pagination (scrolling up through history) can have
+            // advanced it well past 1 by now — force page 1 so this refetch
+            // gets the latest messages, not whatever page was last scrolled
+            // to, before assignAll() replaces the whole list with it.
+            mc.currentPage.value = 1;
+            mc.loadChatsApi(userKey: mc.profileWaKey, from: 'outside');
           }
         }
 
@@ -105,6 +163,11 @@ class AppLifecycleObserver extends WidgetsBindingObserver {
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // 🔎 Full FCM payload as received (background/terminated) — check this in
+  // the console (or `adb logcat` since debugPrint may not show in a killed
+  // app's console) to verify what the backend is actually sending.
+  debugPrint('📥 FCM (background) message.data: ${message.data}');
 
   final type = message.data['type'];
   final prefs = await SharedPreferences.getInstance();
@@ -191,12 +254,114 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await _clearCallPrefs(prefs);
   }
 
-  if (type == 'new_message' || message.notification != null) {
+  // Backend doesn't send `type: 'new_message'` for chat payloads today —
+  // only `subuser`/`data2` — so detection falls back to `data2`'s presence
+  // (see isChatMessagePayload). Without this fallback, this whole block was
+  // being skipped for every real chat message in the background/killed
+  // state, which is why no notification ever appeared there.
+  if (isChatMessagePayload(message.data) || message.notification != null) {
     debugPrint("📩 Background message received!");
 
-    // Yahan aapko ek flag set karna hai ki "Naya message aaya hai, list refresh karo"
+    final chatData = decodeChatPayload(message.data);
+    final incomingWaKey = chatData?['profile_wa_key']?.toString();
+    if (incomingWaKey != null) {
+      final queued = prefs.getStringList(_kPendingBgChatBumpsKey) ?? [];
+      queued.add(jsonEncode({
+        'profile_wa_key': incomingWaKey,
+        'profile_name': chatData?['profile_name']?.toString(),
+        'profile_wa_id': chatData?['profile_wa_id']?.toString(),
+        'updated_time': chatData?['updated_at']?.toString(),
+      }));
+      await prefs.setStringList(_kPendingBgChatBumpsKey, queued);
+    }
+
+    // "Naya message aaya hai, list refresh karo" — checked on next resume.
     await prefs.setBool('has_new_messages_to_refresh', true);
+
+    // Only show it ourselves when the payload is data-only. If a
+    // `notification` block is present, Android already auto-displays it —
+    // calling show() here too was producing two notifications for the same
+    // message (one from the OS, one from us).
+    if (message.notification == null) {
+      await _showBackgroundChatNotification(
+        title: chatSenderName(chatData),
+        body: chatPreviewText(chatData),
+      );
+    }
   }
+}
+
+// A background isolate doesn't share the main isolate's
+// FlutterLocalNotificationsPlugin instance/state, so this creates and
+// initializes its own minimal instance just to show one notification.
+// Reuses the same channel id/icon as NotificationService.showChatNotification
+// so both land in the same Android notification channel.
+Future<void> _showBackgroundChatNotification({
+  required String title,
+  required String body,
+}) async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    ),
+  );
+
+  const androidDetails = AndroidNotificationDetails(
+    'message',
+    'text',
+    channelDescription: 'used for showing chat messages.',
+    importance: Importance.max,
+    priority: Priority.high,
+    playSound: true,
+    enableVibration: true,
+  );
+  const darwinDetails = DarwinNotificationDetails(
+    presentAlert: true,
+    presentBadge: true,
+    presentSound: true,
+  );
+
+  await plugin.show(
+    id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    title: title,
+    body: body,
+    notificationDetails:
+        const NotificationDetails(android: androidDetails, iOS: darwinDetails),
+  );
+}
+
+// Registers the "message" channel at IMPORTANCE_MAX before anything can
+// possibly notify — without this, if the very first FCM push a fresh
+// install ever receives is one with a `notification` block (routed here by
+// the manifest's default_notification_channel_id), Android auto-creates
+// that channel itself at IMPORTANCE_DEFAULT (no heads-up/sound), and once
+// created a channel's importance can't be raised in code again — only the
+// user can change it from system settings. Pre-creating it here means every
+// install gets high-importance chat notifications from the first message,
+// not just after our own data-only-message code path has happened to run
+// once already.
+Future<void> _ensureHighPriorityChatChannel() async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(),
+    ),
+  );
+  const channel = AndroidNotificationChannel(
+    'message',
+    'text',
+    description: 'used for showing chat messages.',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
+  );
+  await plugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
 }
 
 // ============================================
@@ -253,6 +418,7 @@ Future<void> main() async {
   // and call listeners must already be wired up before the UI can react to
   // an incoming call.
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _ensureHighPriorityChatChannel();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   WhatsAppCallingConfig.setupCallKitEvents();
   await _initGlobalCalling();

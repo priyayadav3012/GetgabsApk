@@ -13,6 +13,7 @@ import 'package:getgabs/data/get_storage/get_storage.dart';
 import 'package:getgabs/data/models/active_chat_model.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
+import 'package:getgabs/domain/services/notifications_service/chat_payload_parser.dart';
 import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:path_provider/path_provider.dart';
@@ -337,23 +338,75 @@ class NotificationService {
   // ============================================
   // FIREBASE INIT — FOREGROUND MESSAGES
   // ============================================
+  // FirebaseMessaging.onMessage is a single global stream (tied to
+  // FirebaseMessaging.instance, not this NotificationService instance) —
+  // NotificationService itself isn't a singleton, so calling firebaseInit()
+  // more than once (e.g. DashboardController.onInit() re-running whenever
+  // the dashboard route/controller is re-created) added another .listen()
+  // subscription each time without ever cancelling the previous one. Every
+  // incoming message then fired once per accumulated subscription, causing
+  // duplicate chat-list refreshes / mark-as-read calls per message and
+  // eventually backend rate-limiting ("Too many requests"). This static
+  // flag makes registration a one-time, app-lifetime effect.
+  static bool _foregroundListenerRegistered = false;
+
   void firebaseInit() {
+    if (_foregroundListenerRegistered) return;
+    _foregroundListenerRegistered = true;
     FirebaseMessaging.onMessage.listen((message) async {
+      // 🔎 Full FCM payload as received (foreground) — check this in the
+      // console to verify what the backend is actually sending.
+      debugPrint('📥 FCM (foreground) message.data: ${message.data}');
+      if (message.notification != null) {
+        debugPrint('📥 FCM (foreground) notification: '
+            'title=${message.notification?.title}, '
+            'body=${message.notification?.body}');
+      }
+
       final msgType = message.data['type'] ?? '';
       if (msgType == 'incoming_call' || msgType == 'call_terminated') {
         debugPrint('📞 Call notification — skipping');
         return;
       }
 
-      // Refresh the in-app chat lists so the customer moves to the top /
-      // shows as unread. This must happen regardless of whether Android
-      // also auto-displays a system notification below — that only covers
-      // the tray, not the in-app list, and the Socket.IO 'chatdata' event
-      // this used to rely on doesn't reliably fire for every message.
-      if (msgType == 'new_message' && Get.isRegistered<DashboardController>()) {
-        final dc = Get.find<DashboardController>();
-        dc.refreshActiveChatList(increment: 'replace');
-        dc.refreshRollingOverChatList(increment: 'replace');
+      // Bump the relevant chat to the top / bump its unread badge, and (if
+      // that chat is open) deliver the message straight into it. This used
+      // to be SocketsController's job (local list manipulation on the
+      // 'chatdata' event — no network call), now retired. The very first
+      // version of this FCM handling called refreshActiveChatList /
+      // refreshRollingOverChatList (a full REST refetch + full list
+      // replace) on *every* message instead, which visibly reloaded the
+      // entire chat list each time rather than just floating one row to
+      // the top — bumpChatOnIncomingMessage() below restores the original,
+      // local-only behavior.
+      //
+      // The backend doesn't currently send `type: 'new_message'` on chat
+      // payloads (only `subuser`/`data2`), so detection falls back to
+      // isChatMessagePayload() — without it none of this ever ran.
+      final isChatMessage = isChatMessagePayload(message.data);
+      var isCurrentlyOpenChat = false;
+      if (isChatMessage) {
+        final chatData = decodeChatPayload(message.data);
+        final incomingWaKey = chatData?['profile_wa_key']?.toString();
+
+        isCurrentlyOpenChat = incomingWaKey != null &&
+            Get.isRegistered<MessagesPageController>() &&
+            Get.find<MessagesPageController>().profileWaKey == incomingWaKey;
+
+        if (incomingWaKey != null && Get.isRegistered<DashboardController>()) {
+          Get.find<DashboardController>().bumpChatOnIncomingMessage(
+            profileWaKey: incomingWaKey,
+            customerName: chatData?['profile_name']?.toString() ?? 'Unknown',
+            customerWaId:
+                int.tryParse(chatData?['profile_wa_id']?.toString() ?? '') ?? 0,
+            isCurrentlyOpen: isCurrentlyOpenChat,
+          );
+        }
+
+        if (isCurrentlyOpenChat) {
+          Get.find<MessagesPageController>()
+              .handleIncomingMessage({'data': chatData});
+        }
       }
 
       if (Platform.isIOS) {
@@ -370,6 +423,17 @@ class NotificationService {
           return;
         }
 
+        // Socket used to own foreground chat notifications
+        // (SocketsController.handleNotification()) — now retired, so this
+        // is the only thing left that can show one. Only suppress it for
+        // the chat currently open on screen (already visible there); any
+        // other incoming chat message should still alert, same as it would
+        // in background.
+        if (isChatMessage && isCurrentlyOpenChat) {
+          debugPrint('⏭️ Skipping — this chat is already open on screen');
+          return;
+        }
+
         // Sirf data-only messages pe manually show karo
         if (message.data.isNotEmpty) {
           showNotification(message);
@@ -380,9 +444,22 @@ class NotificationService {
 
   // BACKGROUND / TERMINATED MESSAGE HANDLER
   // ============================================
+  // Same accumulation issue as firebaseInit() above: DashboardController.
+  // onInit() calls this unconditionally every time it re-runs, and
+  // FirebaseMessaging.onMessageOpenedApp is a single global stream — without
+  // this guard, each accumulated listener re-fired handleProfileNavigation()
+  // for the same notification tap, which (when switching chats) calls
+  // loadChatsApi(from: 'outside') → messageChatList.assignAll(...). Multiple
+  // concurrent/racing calls to that meant a slower, staler REST response
+  // could land after a live FCM-inserted message and wipe it from the list
+  // — looking exactly like the message had been deleted.
+  static bool _interactMessageListenerRegistered = false;
+
   Future<void> setupInteractMessage() async {
+    if (_interactMessageListenerRegistered) return;
+    _interactMessageListenerRegistered = true;
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      print('background=============++++++++++++++');
+      debugPrint('📥 FCM (opened from tray) message.data: ${message.data}');
       final profileData = _extractProfileData(message.data);
 
       if (profileData != null) {
@@ -397,7 +474,9 @@ class NotificationService {
     FirebaseMessaging.instance
         .getInitialMessage()
         .then((RemoteMessage? message) {
-      print('now message has arrived.');
+      if (message != null) {
+        debugPrint('📥 FCM (initial/terminated) message.data: ${message.data}');
+      }
       if (message != null && message.data.isNotEmpty) {
         // ✅ Call notifications skip karo
         final msgType = message.data['type'] ?? '';
@@ -556,10 +635,15 @@ class NotificationService {
       iOS: darwinNotificationDetails,
     );
 
+    // message.notification is null for data-only chat payloads (the normal
+    // case here) — force-unwrapping it used to throw a null-check error on
+    // every one of these, silently swallowed as an "Unhandled Exception"
+    // with no notification ever actually shown.
+    final chatData = decodeChatPayload(data);
     _flutterLocalNotificationsPlugin.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title: message.notification!.title,
-      body: message.notification!.body,
+      title: message.notification?.title ?? chatSenderName(chatData),
+      body: message.notification?.body ?? chatPreviewText(chatData),
       notificationDetails: notificationDetails,
       payload: "data",
     );

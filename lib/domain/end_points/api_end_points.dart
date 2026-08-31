@@ -23,6 +23,12 @@ import 'package:url_launcher/url_launcher.dart';
 class ApiEndPoints {
   static const String baseUrl = 'https://app.getgabs.com/v2/flutterapplication/';
   static const String _scalewizLoginBaseUrl = 'https://app.getgabs.com/v3/flutterapplication/';
+  // Prefix for the relative `*_wasabi_path` values voiceCallLogs returns
+  // (call recording audio / transcript JSON) to turn them into fetchable
+  // URLs. Must be https — the server 301s http -> https, and ExoPlayer
+  // (which audioplayers uses on Android) refuses to follow a cross-protocol
+  // redirect by default, so an http:// URL here silently fails to play.
+  static const String mediaStorageBaseUrl = 'https://app.getgabs.com/getgabs-uploads/';
   static _AuthEndPoints authEndpoints = _AuthEndPoints();
   static _DashboardEndPoints dashboardEndPoints = _DashboardEndPoints();
   static _ChatEndPoints chatEndPoints = _ChatEndPoints();
@@ -58,6 +64,8 @@ class _ChatEndPoints {
   final String shortMessageList = "shortmessagelist";
   final String sendShortMessage = "send-message";
   final String voiceCallLogs = "voiceCallLogs";
+  final String sendReplyChat = "sendReplyChat";
+  final String customerNameUpdateUrl = "customer-name-update";
 }
 
 class _MoreScreenEndPoints {
