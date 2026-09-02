@@ -194,8 +194,13 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
               Navigator.pop(context); // Dismisses modal prompt layout safely
               try {
                 // Step 1: Firebase Cloud Messaging background target topic unsubscribe hook invocation
+                // Awaited so it fully finishes (including its iOS APNS token
+                // check) before deleteToken() below touches the same FCM
+                // instance — racing them previously stalled the platform
+                // channel on iOS and caused a late duplicate navigation back
+                // to the login screen after a subsequent re-login.
                 NotificationService notificationService = NotificationService();
-                notificationService.onUnsubscribeTopic();
+                await notificationService.onUnsubscribeTopic();
 
                 // 🔥 CRITICAL FIX: Delete the hardware instance token from Firebase Messaging
                 // This ensures Ghost Notifications stop immediately for this user session.

@@ -1446,8 +1446,7 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
   }
 
   void downloadMedia(Message message) async {
-    final url =
-        "https://app.getgabs.com/customers/mediafile/${message.messageText}";
+    final url = Message.buildMediaUrl(message.messageText);
     final filename = url.split('/').last;
     final Directory directory = await getApplicationDocumentsDirectory();
     final filePath = '${directory.path}/$filename';
@@ -1614,7 +1613,10 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
   }
 
   void updateMessageId(String tempMessageId, String actualMessageId,
-      {int? serverId, String? serverCreatedAt}) {
+      {int? serverId,
+      String? serverCreatedAt,
+      String? serverMessageText,
+      String? serverMessageType}) {
     int index =
         messageChatList.indexWhere((msg) => msg.messageId == tempMessageId);
     print(index);
@@ -1626,11 +1628,19 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
       // timestamp is replaced by the authoritative one — this makes the LIVE
       // order match what a reopen (server-loaded) shows, even if the device
       // clock drifts from the server.
+      // For media messages, also adopt the server's message_text/message_type
+      // and flip `local` to false right away — otherwise the optimistic
+      // message keeps pointing at the on-device file path (messageText,
+      // local: true) until the next full chat reload, instead of the
+      // server-confirmed media reference.
       messageChatList[index] = messageChatList[index].copyWith(
           messageId: actualMessageId,
           deliveryStatus: 'sent',
           id: (serverId != null && serverId > 0) ? serverId : null,
-          createdAt: _parseServerTimestamp(serverCreatedAt));
+          createdAt: _parseServerTimestamp(serverCreatedAt),
+          messageText: serverMessageText,
+          messageType: serverMessageType,
+          local: serverMessageText != null ? false : null);
       print(messageChatList[index].messageText);
       print(actualMessageId);
       print('datatemplateeeee');
@@ -1718,15 +1728,16 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
         print('Message sent successfully');
         final message = parsedResponse['message'];
 
-        final messageText = message['message_text'];
-        final messageType = message['message_type'];
-        // sendMediaMessage(key, messageText, messageType);
+        final messageText = message['message_text']?.toString();
+        final messageType = message['message_type']?.toString();
         var actualMessageId = message['message_id'].toString();
         final serverId = int.tryParse(message['id']?.toString() ?? '');
         final serverCreatedAt = message['created_at']?.toString();
         updateMessageId(tempMessageId, actualMessageId,
             serverId: serverId,
-            serverCreatedAt: serverCreatedAt); // sync id + server time
+            serverCreatedAt: serverCreatedAt,
+            serverMessageText: messageText,
+            serverMessageType: messageType); // sync id + server time + media ref
       } else {
         print('Failed to send message');
       }

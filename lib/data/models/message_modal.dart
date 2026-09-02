@@ -78,6 +78,28 @@ class Message {
 
   bool get isSentByMe => sender != 1;
 
+  static const String mediaFileBaseUrl =
+      'https://app.getgabs.com/customers/mediafile/';
+
+  // For image/video/audio/document messages, messageText is normally just a
+  // bare filename that this prefix turns into a downloadable URL. But the
+  // backend/WhatsApp payload occasionally sends a full URL there instead
+  // (e.g. a CDN link) — naively prefixing that produces a broken, doubled
+  // URL that silently fails to load (CachedNetworkImage just shows a broken
+  // image icon with no error surfaced). Detect that case instead.
+  static String buildMediaUrl(String text) {
+    final trimmed = text.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+    return '$mediaFileBaseUrl$trimmed';
+  }
+
+  // Resolved network URL for this message's media, honoring `local` (a
+  // locally-picked file isn't a URL at all — callers should use
+  // File(messageText) instead when local is true).
+  String get mediaUrl => local ? messageText : Message.buildMediaUrl(messageText);
+
   String get displayText {
   if (messageType != 'text') return messageText;
   try {

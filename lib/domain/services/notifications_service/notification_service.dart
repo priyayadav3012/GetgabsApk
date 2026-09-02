@@ -201,7 +201,15 @@ class NotificationService {
   // ============================================
   // UNSUBSCRIBE FROM TOPIC
   // ============================================
-  void onUnsubscribeTopic() async {
+  // Returns a Future (rather than fire-and-forget) so callers can await full
+  // completion before proceeding — e.g. logout must not call deleteToken()
+  // while this is still mid-flight, since both touch the same FCM/APNS
+  // instance on iOS and racing them can stall the platform channel.
+  // Storage-clearing and login-screen navigation are left to the caller
+  // (_handleSignOut) so logout has a single place that does them, instead
+  // of this running its own late/duplicate navigation after the caller
+  // already has.
+  Future<void> onUnsubscribeTopic() async {
     try {
       print("🔄 [onUnsubscribeTopic] Unsubscribe process started...");
       final topic = await getUserTopic();
@@ -216,8 +224,6 @@ class NotificationService {
         if (!apnsReady) {
           print(
               "⚠️ Skipping unsubscribeFromTopic on iOS because APNS token is not ready.");
-          userData.clearAllData();
-          Get.offAllNamed(AppRoute.loginWithEmail);
           return;
         }
       }
@@ -225,13 +231,8 @@ class NotificationService {
       print("📡 Unsubscribing from: $topic");
       await firebaseMessaging.unsubscribeFromTopic(topic);
       print("✅ UNSUBSCRIBED FROM TOPIC: $topic");
-
-      userData.clearAllData();
-      Get.offAllNamed(AppRoute.loginWithEmail);
     } catch (e) {
       print("❌ [onUnsubscribeTopic] Error: $e");
-      userData.clearAllData();
-      Get.offAllNamed(AppRoute.loginWithEmail);
     }
   }
 

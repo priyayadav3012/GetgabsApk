@@ -36,13 +36,34 @@ Map<String, dynamic>? decodeChatPayload(Map<String, dynamic> data) {
 }
 
 /// A safe, human-readable preview of the message. `message_text` can itself
-/// be a JSON-encoded WhatsApp API payload (e.g. for template/campaign
-/// sends) rather than plain text, so raw JSON is never shown to the user.
+/// be a JSON-encoded WhatsApp API payload (e.g. for template/campaign sends,
+/// or a customer's button/list reply) rather than plain text, so raw JSON is
+/// never shown to the user — it's decoded down to the body text, or to the
+/// picked button/list option title, matching how the chat screen renders
+/// these same message types (messages_page.dart's fallback bubble branch).
 String chatPreviewText(Map<String, dynamic>? chatData) {
   final raw = chatData?['message_text']?.toString().trim() ?? '';
   if (raw.isEmpty) return 'New message';
-  if (raw.startsWith('{') || raw.startsWith('[')) return 'New message';
-  return raw;
+  if (!raw.startsWith('{') && !raw.startsWith('[')) return raw;
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is Map) {
+      final interactive = decoded['interactive'];
+      final replyTitle = interactive is Map
+          ? (interactive['list_reply']?['title']?.toString() ??
+              interactive['button_reply']?['title']?.toString() ??
+              interactive['nfm_reply']?['name']?.toString())
+          : null;
+      final body = decoded['text']?['body']?.toString() ??
+          decoded['body']?.toString() ??
+          decoded['caption']?.toString() ??
+          replyTitle;
+      if (body != null && body.trim().isNotEmpty) return body.trim();
+    }
+  } catch (_) {
+    // fall through to generic fallback below
+  }
+  return 'New message';
 }
 
 String chatSenderName(Map<String, dynamic>? chatData) {

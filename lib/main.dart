@@ -168,6 +168,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // the console (or `adb logcat` since debugPrint may not show in a killed
   // app's console) to verify what the backend is actually sending.
   debugPrint('📥 FCM (background) message.data: ${message.data}');
+  if (message.notification != null) {
+    debugPrint('📥 FCM (background) notification: '
+        'title=${message.notification?.title}, '
+        'body=${message.notification?.body}');
+  }
 
   final type = message.data['type'];
   final prefs = await SharedPreferences.getInstance();

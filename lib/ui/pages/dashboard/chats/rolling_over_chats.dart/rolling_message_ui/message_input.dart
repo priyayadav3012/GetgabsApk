@@ -262,9 +262,7 @@ class MessageRollingPage extends StatelessWidget {
     } else if (message.messageType == 'image') {
       return ImageMessageUi(
         imageFile: message.local ? File(message.messageText) : null,
-        imageUrl: message.local
-            ? message.messageText
-            : "https://app.getgabs.com/customers/mediafile/${message.messageText}",
+        imageUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -275,9 +273,7 @@ class MessageRollingPage extends StatelessWidget {
       );
     } else if (message.messageType == 'audio') {
       return AudioMessageUi(
-        audioUrl: message.local
-            ? message.messageText
-            : 'https://app.getgabs.com/customers/mediafile/${message.messageText}',
+        audioUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -289,9 +285,7 @@ class MessageRollingPage extends StatelessWidget {
       );
     }else if (message.messageType == 'video') {
       return VideoMessageUi(
-        videoUrl: message.local
-            ? message.messageText
-            : 'https://app.getgabs.com/customers/mediafile/${message.messageText}',
+        videoUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -303,9 +297,7 @@ class MessageRollingPage extends StatelessWidget {
       );
     } else if (message.messageType == 'document') {
       return DocumentMessageUi(
-        documentFile: message.local
-            ? message.messageText
-            : "https://app.getgabs.com/customers/mediafile/${message.messageText}",
+        documentFile: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -556,8 +548,7 @@ class MessageRollingPage extends StatelessWidget {
 
                       if (messages.messageType == 'image')
                         ImageMessageUi(
-                          imageUrl:
-                              "https://app.getgabs.com/customers/mediafile/${messages.messageText}",
+                          imageUrl: messages.mediaUrl,
                           isSentByMe: true,
                           createdAt: messages.createdAt,
                           mediaQuery: MediaQuery.of(context).size,
@@ -568,8 +559,7 @@ class MessageRollingPage extends StatelessWidget {
 
                       if (messages.messageType == 'video')
                         VideoMessageUi(
-                          videoUrl:
-                              'https://app.getgabs.com/customers/mediafile/${messages.messageText}',
+                          videoUrl: messages.mediaUrl,
                           isSentByMe: true,
                           createdAt: messages.createdAt,
                           mediaQuery: mediaQuery,

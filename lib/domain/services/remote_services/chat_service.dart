@@ -25,7 +25,7 @@ class ChatServices {
         data, ApiEndPoints.baseUrl + ApiEndPoints.chatEndPoints.chatList,
         headers: headers);
     return response;
-  }
+  }  
 
   Future<dynamic>sendMessageService(var data, {var headers}) async {
     dynamic response = _apiService.postApi(
