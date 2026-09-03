@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -10,6 +11,7 @@ import 'package:getgabs/domain/controllers/dashboard/call_logs/call_logs_control
 import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:getgabs/domain/services/whtasapp_calling_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../data/models/active_chat_model.dart';
 import '../../../data/models/message_modal.dart';
 import '../../services/notifications_service/notification_service.dart';
@@ -189,6 +191,7 @@ class DashboardController extends GetxController {
     });
 
     notificationService.requestNotificationPermission();
+    _requestIgnoreBatteryOptimizations();
     try {
       await notificationService.initLocalNotifications();
     } catch (e) {
@@ -206,6 +209,25 @@ class DashboardController extends GetxController {
 
     activeChatListApi();
     rollingOverChatListApi();
+  }
+
+  // OEM battery managers (Xiaomi/MIUI, Oppo/ColorOS, Vivo, some Samsung
+  // configs) aggressively kill/throttle background FCM delivery for apps
+  // that aren't whitelisted — a common cause of chat push notifications
+  // arriving late or not at all on Android. Prompting once here (after
+  // login, alongside the other notification setup) asks the user to
+  // exempt the app; harmless no-op on iOS and on Android builds/OEMs
+  // where the permission doesn't apply.
+  Future<void> _requestIgnoreBatteryOptimizations() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.status;
+      if (!status.isGranted) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (e) {
+      debugPrint('⚠️ ignoreBatteryOptimizations request failed: $e');
+    }
   }
 
   void _scrollListener() {

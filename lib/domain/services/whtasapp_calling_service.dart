@@ -635,6 +635,20 @@ class WhatsAppCallingService {
         ),
       );
 
+      // The backend can send the same incoming call over BOTH this
+      // always-on global-call socket AND an FCM push handled independently
+      // by _firebaseMessagingBackgroundHandler (main.dart) — _callKitShowing
+      // above only guards against THIS instance re-firing, not against that
+      // unrelated path. CallKit itself (native side) is the one source of
+      // truth both paths can check regardless of which got there first.
+      final alreadyShowing = await FlutterCallkitIncoming.activeCalls();
+      if (alreadyShowing.any((c) => c.id == callKitId)) {
+        debugPrint(
+            '📵 Skipping showCallkitIncoming — call $callKitId already active');
+        _callKitShowing = false;
+        return;
+      }
+
       await FlutterCallkitIncoming.showCallkitIncoming(params);
     } catch (e) {
       debugPrint('❌ CallKit show error: $e');

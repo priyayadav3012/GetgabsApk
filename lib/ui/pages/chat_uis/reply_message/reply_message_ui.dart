@@ -304,7 +304,7 @@ class ReplyMessageUi extends StatelessWidget {
       } else if (messageType == 'image') {
         final imageUrl = reply['local'] == true
             ? messageText
-            : "https://app.getgabs.com/customers/mediafile/$messageText";
+            : Message.buildMediaUrl(messageText);
         
         // Create a widget to adjust the size of the grey container based on the image
         return isPreview
@@ -366,7 +366,7 @@ class ReplyMessageUi extends StatelessWidget {
       } else if (messageType == 'video') {
         final videoUrl = reply['local'] == true
             ? messageText
-            : 'https://app.getgabs.com/customers/mediafile/$messageText';
+            : Message.buildMediaUrl(messageText);
         
         // Create a widget to adjust the size of the grey container based on the image
         return Column(
@@ -453,7 +453,7 @@ class ReplyMessageUi extends StatelessWidget {
       } else if (messageType == 'document') {
         final documentUrl = reply['local'] == true
             ? messageText
-            : 'https://app.getgabs.com/customers/mediafile/$messageText';
+            : Message.buildMediaUrl(messageText);
         
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,

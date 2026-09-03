@@ -49,3 +49,31 @@ String chatSenderName(Map<String, dynamic>? chatData) {
   final name = chatData?['profile_name']?.toString().trim();
   return (name == null || name.isEmpty) ? 'New message' : name;
 }
+
+/// A stable local-notification id derived from a message's own id. The
+/// backend re-sends the same message over FCM as its delivery_status
+/// progresses (sent → delivered → read) — a fresh timestamp-based id meant
+/// every re-send popped a brand-new notification instead of updating the
+/// existing one, so the user saw the "same" message notified twice or more.
+/// Deriving the id from the message id instead makes a later push for the
+/// SAME message replace this notification. Shared between the foreground
+/// (NotificationService) and background (main.dart, separate isolate)
+/// handlers so both compute the identical id for the same message — plain
+/// String.hashCode isn't guaranteed stable across isolates/VM runs.
+int stableNotificationId(String seed) {
+  int hash = 0;
+  for (final unit in seed.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
+  }
+  return hash;
+}
+
+/// Convenience wrapper: the id to use for a chat message's notification —
+/// [chatData]'s own `message_id` when present, otherwise a fresh
+/// timestamp-based id (never notify with a fixed placeholder id).
+int chatNotificationId(Map<String, dynamic>? chatData) {
+  final messageId = chatData?['message_id']?.toString();
+  return (messageId != null && messageId.isNotEmpty)
+      ? stableNotificationId(messageId)
+      : DateTime.now().millisecondsSinceEpoch ~/ 1000;
+}

@@ -104,11 +104,24 @@ class MessagesPage extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         maxLines: 1,
                       ),
-                      Text(
-                        messagesPageController.userProfile.value.profileWaId
-                            .toString(),
-                        style: const TextStyle(fontSize: 12),
-                      ),
+                      Obx(() => Text(
+                            messagesPageController.isOtherPartyTyping.value
+                                ? 'typing…'
+                                : messagesPageController
+                                    .userProfile.value.profileWaId
+                                    .toString(),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: messagesPageController
+                                      .isOtherPartyTyping.value
+                                  ? const Color(0xFF00A884)
+                                  : null,
+                              fontStyle: messagesPageController
+                                      .isOtherPartyTyping.value
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                            ),
+                          )),
                     ],
                   ),
                 ),
@@ -295,7 +308,15 @@ class MessagesPage extends StatelessWidget {
                 context,
               ),
 
-              SizedBox(height: mediaQuery.height * 0.01),
+              // Small breathing room below the composer — but only when the
+              // SafeArea above isn't already reserving bottom space (e.g.
+              // Android, where that inset is usually 0). On iPhones with a
+              // home indicator, SafeArea already adds ~34px there; stacking
+              // this fixed gap on top of it is what made the composer look
+              // like it had an oversized white strip beneath it on iOS while
+              // Android (near-zero inset) looked fine.
+              if (MediaQuery.of(context).padding.bottom == 0)
+                SizedBox(height: mediaQuery.height * 0.01),
             ],
           ),
         ),
@@ -638,9 +659,7 @@ class MessagesPage extends StatelessWidget {
     } else if (message.messageType == 'image') {
       return ImageMessageUi(
         imageFile: message.local ? File(message.messageText) : null,
-        imageUrl: message.local
-            ? message.messageText
-            : "https://app.getgabs.com/customers/mediafile/${message.messageText}",
+        imageUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -653,9 +672,7 @@ class MessagesPage extends StatelessWidget {
       );
     } else if (message.messageType == 'audio') {
       return AudioMessageUi(
-        audioUrl: message.local
-            ? message.messageText
-            : 'https://app.getgabs.com/customers/mediafile/${message.messageText}',
+        audioUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -669,9 +686,7 @@ class MessagesPage extends StatelessWidget {
 // loadThumbnailFromUrl('https://app.getgabs.com/customers/mediafile/${message.messageText}');
 // return _buildThumbnailView('https://app.getgabs.com/customers/mediafile/${message.messageText}');
       return VideoMessageUi(
-        videoUrl: message.local
-            ? message.messageText
-            : 'https://app.getgabs.com/customers/mediafile/${message.messageText}',
+        videoUrl: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -683,9 +698,7 @@ class MessagesPage extends StatelessWidget {
       );
     } else if (message.messageType == 'document') {
       return DocumentMessageUi(
-        documentFile: message.local
-            ? message.messageText
-            : "https://app.getgabs.com/customers/mediafile/${message.messageText}",
+        documentFile: message.mediaUrl,
         isSentByMe: message.sender == 1 ? false : true,
         createdAt: message.createdAt,
         mediaQuery: mediaQuery,
@@ -1293,6 +1306,9 @@ Widget _buildInputField(MessagesPageController messagesPageController,
                   if (text == '/') {
                     messagesPageController.textEditingController.clear();
                     ShortMessageSheet.show(messagesPageController);
+                  }
+                  if (text.isNotEmpty) {
+                    messagesPageController.notifyTyping();
                   }
                 },
                 toolbarOptions: const ToolbarOptions(

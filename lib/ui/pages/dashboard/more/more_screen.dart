@@ -54,10 +54,16 @@ class MoreScreen extends StatefulWidget {
 
 class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateMixin {
 
-  // Socket.IO retired for chat (see DashboardBinding) — no longer registered,
-  // so this is nullable and every use below is guarded accordingly.
+  // Now registered again (see DashboardBinding) but kept nullable/guarded
+  // here regardless, in case this screen is ever reachable before dashboard
+  // binding runs. NOTE: Get.find() must be explicitly typed — inferring it
+  // from this field's (nullable) declared type would look up a
+  // "SocketsController?" registration, which never matches the
+  // "SocketsController" Get.put() actually registered, and throws.
   final SocketsController? _socketsController =
-      Get.isRegistered<SocketsController>() ? Get.find() : null;
+      Get.isRegistered<SocketsController>()
+          ? Get.find<SocketsController>()
+          : null;
   // Fetch cloud-synchronized user entity profile variables
   final ProfileController profileController = Get.put(ProfileController());
 
@@ -194,8 +200,13 @@ class _MoreScreenState extends State<MoreScreen> with SingleTickerProviderStateM
               Navigator.pop(context); // Dismisses modal prompt layout safely
               try {
                 // Step 1: Firebase Cloud Messaging background target topic unsubscribe hook invocation
+                // Awaited so it fully finishes (including its iOS APNS token
+                // check) before deleteToken() below touches the same FCM
+                // instance — racing them previously stalled the platform
+                // channel on iOS and caused a late duplicate navigation back
+                // to the login screen after a subsequent re-login.
                 NotificationService notificationService = NotificationService();
-                notificationService.onUnsubscribeTopic();
+                await notificationService.onUnsubscribeTopic();
 
                 // 🔥 CRITICAL FIX: Delete the hardware instance token from Firebase Messaging
                 // This ensures Ghost Notifications stop immediately for this user session.

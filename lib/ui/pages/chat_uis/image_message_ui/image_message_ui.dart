@@ -151,8 +151,10 @@ class ImageMessageUi extends StatelessWidget {
                   imageUrl: controller.imageUrl,
                   fit: BoxFit.cover,
                   placeholder: (context, url) => _buildBlurredImage(url),
-                  errorWidget: (_, __, ___) =>
-                      const Icon(Icons.broken_image),
+                  errorWidget: (_, url, error) {
+                    debugPrint('ImageMessageUi failed to load "$url": $error');
+                    return const Icon(Icons.broken_image);
+                  },
                 ),
               ),
             );

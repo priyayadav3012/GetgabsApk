@@ -32,26 +32,36 @@ class DocumentMessageUi extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final documentContent = GetBuilder<DocumentController>(
+      init: DocumentController(documentFile, isLocal: isLocal),
+      global: false,
+      builder: (controller) {
+        if (deliveryStatus == 'failed') {
+          // Show blurred placeholder if the document failed to download
+          return _buildBlurredDocumentPlaceholder();
+        } else {
+          // Show the actual document widget
+          return _buildDocumentWidget(controller);
+        }
+      },
+    );
+
+    // isInTemplate means a caller (e.g. TempleteMessageUi, for AI-agent
+    // messages carrying an inline document) already wraps this in its own
+    // BaseMessageUi bubble — wrapping it again here produced a visible
+    // "bubble inside a bubble" (its own background/shadow plus a second,
+    // duplicate timestamp+ticks row under the document). Render just the
+    // card in that case; the outer caller's bubble covers the rest.
+    if (isInTemplate) {
+      return Center(child: documentContent);
+    }
+
     return BaseMessageUi(
       isSentByMe: isSentByMe,
       createdAt: createdAt,
       mediaQuery: mediaQuery,
       deliveryStatus: deliveryStatus,
-      child: Center(
-        child: GetBuilder<DocumentController>(
-          init: DocumentController(documentFile, isLocal: isLocal),
-          global: false,
-          builder: (controller) {
-            if (deliveryStatus == 'failed') {
-              // Show blurred placeholder if the document failed to download
-              return _buildBlurredDocumentPlaceholder();
-            } else {
-              // Show the actual document widget
-              return _buildDocumentWidget(controller);
-            }
-          },
-        ),
-      ),
+      child: Center(child: documentContent),
     );
   }
 
@@ -74,12 +84,30 @@ class DocumentMessageUi extends StatelessWidget {
                   documentFile), // Display icon based on document type
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  fileName,
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fileName,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w500),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                    ),
+                    if (path.extension(documentFile).isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          path
+                              .extension(documentFile)
+                              .replaceFirst('.', '')
+                              .toUpperCase(),
+                          style: const TextStyle(
+                              fontSize: 11, color: Colors.black54),
+                        ),
+                      ),
+                  ],
                 ),
               ),
               Obx(() {
@@ -119,9 +147,6 @@ class DocumentMessageUi extends StatelessWidget {
 
   Widget _getDocumentIcon(String filePath) {
     try {
-              return const Icon(Icons.insert_drive_file,
-            color: Colors.green, size: 32);
-
       String fileExtension = path.extension(filePath).toLowerCase();
 
       if (['.jpg', '.jpeg', '.png', '.gif'].contains(fileExtension)) {

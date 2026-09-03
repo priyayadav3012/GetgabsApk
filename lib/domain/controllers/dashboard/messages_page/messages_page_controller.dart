@@ -11,6 +11,7 @@ import 'package:get/get.dart';
 import 'package:getgabs/data/models/message_modal.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/sockets/sockets_controller.dart';
+import 'package:getgabs/domain/end_points/api_end_points.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
@@ -1367,10 +1368,51 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
     replyingToMessage.value = null;
   }
 
+  // ── Typing indicator ─────────────────────────────────────────────────
+  // Client side of a "typing…" indicator, delivered over the (foreground-
+  // only) chat socket — see SocketsController's 'typing' emit/listen. Purely
+  // additive: if the backend doesn't relay this event yet, emitTyping() is a
+  // no-op send and isOtherPartyTyping simply never flips true.
+
+  // True while the OTHER party (the customer) is typing — read by the chat
+  // header to show "typing…" instead of the phone number.
+  var isOtherPartyTyping = false.obs;
+
+  bool _isEmittingTyping = false;
+  Timer? _typingStopTimer;
+
+  // Called from the composer's onChanged. Debounced: only emits the
+  // 'started typing' event once per burst of keystrokes, and auto-emits
+  // 'stopped typing' after a few seconds of inactivity in case the user
+  // never sends (switches chats, backgrounds the app, etc.).
+  void notifyTyping() {
+    if (!_isEmittingTyping) {
+      _isEmittingTyping = true;
+      _socketsController?.emitTyping(profileWaKey);
+    }
+    _typingStopTimer?.cancel();
+    _typingStopTimer = Timer(const Duration(seconds: 4), _stopTyping);
+  }
+
+  void _stopTyping() {
+    _typingStopTimer?.cancel();
+    if (_isEmittingTyping) {
+      _isEmittingTyping = false;
+      _socketsController?.emitStopTyping(profileWaKey);
+    }
+  }
+
+  // Called by SocketsController when the other party's typing state changes.
+  void receiveTypingEvent(bool isTyping) {
+    isOtherPartyTyping.value = isTyping;
+  }
+
   void sendMessage(String customerKey) {
     if (textEditingController.text.trim().isEmpty) {
       return;
     }
+
+    _stopTyping(); // Sending counts as "done typing" — don't wait for the idle timer.
 
     final repliedMessage = replyingToMessage.value;
     String tempMessageId =
@@ -1446,8 +1488,7 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
   }
 
   void downloadMedia(Message message) async {
-    final url =
-        "https://app.getgabs.com/customers/mediafile/${message.messageText}";
+    final url = Message.buildMediaUrl(message.messageText);
     final filename = url.split('/').last;
     final Directory directory = await getApplicationDocumentsDirectory();
     final filePath = '${directory.path}/$filename';
@@ -1586,7 +1627,12 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
       "Content-Type": "application/json",
     };
 
+    debugPrint('📤 [sendReplyApi] POST '
+        '${ApiEndPoints.baseUrl}${ApiEndPoints.chatEndPoints.sendReplyChat}');
+    debugPrint('📤 [sendReplyApi] payload: ${jsonEncode(data)}');
+
     chatServices.sendReplyChatService(data, headers: headers).then((value) {
+      debugPrint('📥 [sendReplyApi] response: $value');
       if (value['status'] == true) {
         final actualMessageId =
             value['message']['message_id']?.toString() ?? tempMessageId;
@@ -1686,10 +1732,9 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
     };
 
     // Create a multipart request
-    var request = http.MultipartRequest(
-        'POST',
-        Uri.parse(
-            'https://app.getgabs.com/v2/flutterapplication/sendmessages'));
+    const mediaSendUrl =
+        'https://app.getgabs.com/v2/flutterapplication/sendmessages';
+    var request = http.MultipartRequest('POST', Uri.parse(mediaSendUrl));
 
     // Add the JSON data as a field
     request.fields['jsondata'] = json.encode(jsonData);
@@ -1703,6 +1748,10 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
       "Content-Type": "multipart/form-data"
     });
 
+    debugPrint('📤 [sendMessageWithMedia] POST $mediaSendUrl');
+    debugPrint('📤 [sendMessageWithMedia] jsondata: ${jsonEncode(jsonData)}');
+    debugPrint('📤 [sendMessageWithMedia] file: $filePath');
+
     try {
       // Send the request
       var response = await request.send();
@@ -1712,6 +1761,7 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
       final parsedResponse = json.decode(responseBody);
 
       // Print the response body
+      debugPrint('📥 [sendMessageWithMedia] status: ${response.statusCode}');
       print('Response Body: $responseBody');
       // Handle the response
       if (response.statusCode == 200) {
@@ -2622,6 +2672,10 @@ Future<void> fetchShortMessages({int page = 1, int paginate = 10}) async {
   @override
   void onClose() {
     _stopStatusResync();
+    _typingStopTimer?.cancel();
+    if (_isEmittingTyping) {
+      _socketsController?.emitStopTyping(profileWaKey);
+    }
     // Stop receiving live socket events for this (now-closing) chat so
     // SocketsController never delivers into a disposed controller.
     if (Get.isRegistered<SocketsController>()) {

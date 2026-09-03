@@ -5,13 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
-import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:socket_io_client_new/socket_io_client_new.dart' as IO;
 import '../../../data/get_storage/get_storage.dart';
-// import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../../../data/models/active_chat_model.dart'; // Import notification package
 import '../../services/notifications_service/notification_service.dart';
 
 class SocketsController extends GetxController with WidgetsBindingObserver {
@@ -20,6 +17,11 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
   final NotificationService notificationService = NotificationService();
 
   late IO.Socket _socket;
+  // _socket is `late` and only assigned once _initializeSocket() confirms an
+  // API key is available (it aborts early otherwise) — this guards every
+  // other access against a LateInitializationError if a lifecycle callback
+  // fires before that.
+  bool _socketReady = false;
   var isAppInForeground = true.obs;
 
   /// The currently-open chat, if any. Set by [MessagesPageController.onInit]
@@ -33,11 +35,39 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
 
   void registerOpenChat(MessagesPageController controller) {
     _openChat = controller;
+    _joinChatRoom(controller.profileWaKey);
   }
 
   void unregisterOpenChat(MessagesPageController controller) {
     if (identical(_openChat, controller)) {
+      _leaveChatRoom(controller.profileWaKey);
       _openChat = null;
+    }
+  }
+
+  // Tells the backend which chat this socket connection is currently
+  // viewing. Needed so it knows which OTHER connected agent sessions to
+  // relay this chat's 'typing' events to (a plain per-connection role/id at
+  // 'connectchannel' time isn't enough — that never carries a chat, only
+  // who the logged-in user is) — without this, there's no way for the
+  // server to route a "typing" emit to the right teammates at all. Harmless
+  // no-op if the backend doesn't implement 'join_chat'/'leave_chat' yet.
+  void _joinChatRoom(String profileWaKey) {
+    if (!_socketReady || profileWaKey.isEmpty) return;
+    try {
+      _socket.emit('join_chat', {'profile_wa_key': profileWaKey});
+      debugPrint('📡 emit join_chat: $profileWaKey');
+    } catch (e) {
+      debugPrint('❌ Error emitting join_chat: $e');
+    }
+  }
+
+  void _leaveChatRoom(String profileWaKey) {
+    if (!_socketReady || profileWaKey.isEmpty) return;
+    try {
+      _socket.emit('leave_chat', {'profile_wa_key': profileWaKey});
+    } catch (e) {
+      debugPrint('❌ Error emitting leave_chat: $e');
     }
   }
 
@@ -98,6 +128,7 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
       })
             .enableForceNew()
             .build());
+    _socketReady = true;
 
     // Error-only listeners: silent during normal operation, but surface the
     // reason (e.g. "Invalid API key", disconnects) if the socket ever fails to
@@ -115,262 +146,90 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
         'admin_id': adminId
       };
       _socket.emit('connectchannel', userinfo);
+
+      // A reconnect (network blip, app backgrounded then resumed, server
+      // restart) means we may have missed 'chatdata'/'messagestatus' events
+      // while disconnected — sockets don't queue undelivered events the way
+      // FCM does. Re-fetch the currently-open chat from REST so nothing is
+      // silently missing; skipped on the very first connect since that chat
+      // was already loaded via the normal REST call when it was opened.
+      if (_hasConnectedBefore) {
+        final openChat = _openChat;
+        if (openChat != null) {
+          // A fresh connection means a fresh server-side session — any
+          // chat-room membership from before the drop is gone, so re-join.
+          _joinChatRoom(openChat.profileWaKey);
+          openChat.loadChatsApi(userKey: openChat.profileWaKey, from: 'outside');
+        }
+      } else {
+        // First-ever connect: registerOpenChat() may have already run and
+        // tried to join before the socket was ready (e.g. cold start racing
+        // MessagesPageController.onInit against this async _initializeSocket),
+        // in which case that join was silently skipped — join now instead.
+        final openChat = _openChat;
+        if (openChat != null) {
+          _joinChatRoom(openChat.profileWaKey);
+        }
+      }
+      _hasConnectedBefore = true;
     });
-/*
+
+    // Scoped ONLY to the currently-open chat (see registerOpenChat) — this is
+    // an ADDITIVE fast-path for near-instant delivery while that chat is on
+    // screen and the app is foreground. Any message for a different/closed
+    // chat is left entirely to FCM (NotificationService.firebaseInit() /
+    // the background handler in main.dart), which already handles the
+    // dashboard-list bump and notification for that case unchanged. This
+    // split matters: bumpChatOnIncomingMessage() increments the unread badge
+    // by 1 per call with no de-dupe, so letting BOTH FCM and this socket
+    // bump a NOT-open chat would double-count it. handleIncomingMessage()
+    // (the open-chat path) IS safe to call from both — it de-dupes by
+    // messageId — so no special guarding is needed there.
     _socket.on('chatdata', (data) {
-      print('Chat data socket: $data');
-      var messageData = data['data'];
-
       try {
-        var dc = Get.find<DashboardController>();
+        final messageData = data['data'];
+        if (messageData == null) return;
+        final incomingWaKey = messageData['profile_wa_key']?.toString();
+        if (incomingWaKey == null || incomingWaKey.isEmpty) return;
 
-        if (Get.currentRoute.contains('/MessagesPage')) {
-          print('shocket notifcationssssssssssss');
-          final MessagesPageController? messagesPageController =
-              Get.isRegistered<MessagesPageController>()
-                  ? Get.find<MessagesPageController>()
-                  : null;
-          // var profile = createProfileFromMessage(message);
-          if (messagesPageController != null) {
-            if (messageData['profile_wa_key'] !=
-                messagesPageController.profileWaKey) {
-              dc.refreshActiveChatList();
-              handleNotification(data);
-            } else {
-              if (!isAppInForeground.value) {
-                dc.refreshActiveChatList();
-                handleNotification(data);
-              }
-            }
-          }
-        } else {
-          dc.refreshActiveChatList();
-          handleNotification(data);
+        final openChat = _openChat;
+        if (openChat == null || openChat.profileWaKey != incomingWaKey) {
+          return; // Not the open chat — FCM already covers this.
+        }
+
+        openChat.handleIncomingMessage(data);
+
+        if (Get.isRegistered<DashboardController>()) {
+          Get.find<DashboardController>().bumpChatOnIncomingMessage(
+            profileWaKey: incomingWaKey,
+            customerName: data['customerprofilename']?.toString() ?? 'Unknown',
+            customerWaId: int.tryParse(
+                    data['customerprofile_wa_id']?.toString() ?? '') ??
+                0,
+            isCurrentlyOpen: true, // always 0-badge/reorder-only — safe to repeat
+          );
         }
       } catch (e) {
-        print(e);
+        debugPrint('❌ Error handling chatdata: $e');
       }
-      //  handleIncomingMessage(data);
     });
- */
 
-// _socket.on('chatdata', (data) async {
+    // Typing indicator — client is ready to emit/receive this the moment the
+    // backend relays it; until then this is a harmless no-op (emitting an
+    // event the server doesn't act on yet, listening for one it never
+    // sends). See emitTyping()/emitStopTyping() below for the emit side.
+    _socket.on('typing', (data) {
+      debugPrint('📥 received typing event: $data');
+      try {
+        final incomingWaKey = data['profile_wa_key']?.toString();
+        final openChat = _openChat;
+        if (openChat == null || openChat.profileWaKey != incomingWaKey) return;
+        openChat.receiveTypingEvent(data['is_typing'] == true);
+      } catch (e) {
+        debugPrint('❌ Error handling typing event: $e');
+      }
+    });
 
-//   print('Chat data socket88: $data');
-
-//   var messageData = data['data'];
-
-//   String name = data['customerprofilename'] ?? "";
-//   String mobNumber = data['customerprofile_wa_id']?.toString() ?? "";
-
-//   // ✅ correct path
-//   // String callStatus = messageData['callHistory']?['call_status'] ?? "";
-//   final data1 = jsonDecode(data);
-
-// final callStatus = data1['data']['callHistory']['call_status'];
-// print(callStatus);
-
-//   print("📞 Call Status: $callStatus");
-
-//   if (callStatus == "call_terminated") {
-//     print('📴 Call terminated');
-
-//     if (Get.isDialogOpen ?? false) {
-//       Get.back();
-//     }
-//   }
-
-//   try {
-
-//     var dc = Get.find<DashboardController>();
-
-//     String incomingWaKey = messageData['profile_wa_key'];
-
-//     int existingIndex = dc.activeProfileDetailsList
-//         .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
-
-//     if (existingIndex != -1) {
-
-//       var existingProfile = dc.activeProfileDetailsList.removeAt(existingIndex);
-
-//       dc.activeProfileDetailsList.insert(
-//         0,
-//         existingProfile.copyWith(
-//           getPendingMsgCount:
-//               isOnMessagesPage(incomingWaKey)
-//                   ? 0
-//                   : existingProfile.getPendingMsgCount + 1,
-//         ),
-//       );
-
-//     } else {
-
-//       int count = isOnMessagesPage(incomingWaKey) ? 0 : 1;
-
-//       dc.activeProfileDetailsList.insert(
-//         0,
-//         Profile(
-//           profileWaId: int.tryParse(mobNumber) ?? 0,
-//           profileWaKey: incomingWaKey,
-//           profileName: name,
-//           getPendingMsgCount: count,
-//           updatedTime:
-//               DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()),
-//           hasVoiceCallingPermission: false,
-//         ),
-//       );
-//     }
-
-//     if (Get.currentRoute.contains('/MessagesPage')) {
-//       print('Socket notifications');
-//       final MessagesPageController? messagesPageController =
-//           Get.isRegistered<MessagesPageController>()
-//               ? Get.find<MessagesPageController>()
-//               : null;
-
-//       if (messagesPageController != null) {
-//         if (incomingWaKey != messagesPageController.profileWaKey) {
-//        //   dc.refreshActiveChatList();
-//           handleNotification(data);
-//         } else {
-//           if (!isAppInForeground.value) {
-//           //  dc.refreshActiveChatList();
-//             handleNotification(data);
-//           }
-//         }
-//       }
-//     } else {
-//     //  dc.refreshActiveChatList();
-//       handleNotification(data);
-//     }
-
-//   } catch (e) {
-//     print("❌ Socket Error: $e");
-//   }
-// });
-    // _socket.on('chatdata', (data) async {
-    //   print('Chat data socket33: $data');
-    //   var messageData = data['data'];
-    //   String name = data['customerprofilename'];
-    //   String mobNumber = data['customerprofile_wa_id'];
-
-    //   if (Get.isDialogOpen ?? false) {
-    //     Get.back();
-    //   }
-
-    //   try {
-    //     var dc = Get.find<DashboardController>();
-    //     // Extract profileWaKey from incoming data
-    //     String incomingWaKey = messageData['profile_wa_key'];
-    //     //int pendingMsgCount = messageData['getpendingmsg_count'];
-
-    //     // Find the existing profile if it exists
-    //     int existingIndex = dc.activeProfileDetailsList
-    //         .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
-
-    //     final nowStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
-
-    //     // Also check the rolling-over (closed) tab — previously only the
-    //     // active tab ever reordered/refreshed on a live incoming message.
-    //     int existingRollingIndex = dc.rollingOverProfileDetailsList
-    //         .indexWhere((profile) => profile.profileWaKey == incomingWaKey);
-
-    //     if (existingIndex != -1) {
-    //       print('exists---------------------');
-    //       // Profile exists, bring it to the top
-    //       var existingProfile =
-    //           dc.activeProfileDetailsList.removeAt(existingIndex);
-    //       dc.activeProfileDetailsList.insert(
-    //         0,
-    //         existingProfile.copyWith(
-    //           getPendingMsgCount: isOnMessagesPage(incomingWaKey)
-    //               ? 0
-    //               : existingProfile.getPendingMsgCount +
-    //                   1, // Update pending message count
-    //           updatedTime: nowStr,
-    //         ),
-    //       );
-    //     } else if (existingRollingIndex != -1) {
-    //       print('exists in rolling-over---------------------');
-    //       var existingRollingProfile =
-    //           dc.rollingOverProfileDetailsList.removeAt(existingRollingIndex);
-    //       dc.rollingOverProfileDetailsList.insert(
-    //         0,
-    //         existingRollingProfile.copyWith(
-    //           getPendingMsgCount: isOnMessagesPage(incomingWaKey)
-    //               ? 0
-    //               : existingRollingProfile.getPendingMsgCount + 1,
-    //           updatedTime: nowStr,
-    //         ),
-    //       );
-    //     } else {
-    //       print('new---------------------');
-
-    //       // Profile does not exist, create a new one and add it to the top
-    //       int count = 1;
-    //       if (isOnMessagesPage(incomingWaKey)) {
-    //         count = 0;
-    //       }
-
-    //       dc.activeProfileDetailsList.insert(
-    //         0,
-    //         Profile(
-    //           profileWaId: int.parse(mobNumber),
-    //           profileWaKey: incomingWaKey,
-    //           profileName: name,
-    //           getPendingMsgCount: count,
-    //           updatedTime: nowStr,
-    //           hasVoiceCallingPermission: false,
-    //         ),
-    //       );
-    //       // dc.activeProfileDetailsList.insert(
-    //       //   0,
-    //       //   Profile(
-    //       //     profileWaId:int.parse(mobNumber) ,
-    //       //     profileWaKey: incomingWaKey,
-    //       //     profileName: name,
-    //       //     getPendingMsgCount: count,
-    //       //   ),
-    //       // );
-    //     }
-
-    //     // Deliver the message into the open chat live (WhatsApp-style) so it
-    //     // renders instantly without needing a reopen. Guarded by the wa-key so
-    //     // a message for a different chat never lands in the wrong conversation.
-    //     final openChat = _openChat;
-    //     final bool isForOpenChat =
-    //         openChat != null && openChat.profileWaKey == incomingWaKey;
-    //     if (isForOpenChat) {
-    //       try {
-    //         openChat.handleIncomingMessage(data);
-    //       } catch (e) {
-    //         debugPrint('Error delivering live message to open chat: $e');
-    //       }
-    //     }
-
-    //     if (Get.currentRoute.contains('/MessagesPage')) {
-    //       print('Socket notifications');
-    //       if (isForOpenChat) {
-    //         // Same chat is open and in the foreground: no notification needed.
-    //         if (!isAppInForeground.value) {
-    //           handleNotification(data);
-    //         }
-    //       } else {
-    //         // A chat is open but the message is for a different conversation.
-    //         handleNotification(data);
-    //       }
-    //     } else {
-    //       //  dc.refreshActiveChatList();
-    //       handleNotification(data);
-    //     }
-    //   } catch (e) {
-    //     print(e);
-    //   }
-    // });
-
-    
-    
-    
     // Single app-lifetime listener for delivery-status updates, routed to the
     // open chat. Previously each MessagesPageController registered its own
     // 'messagestatus' listener and never removed it, so these accumulated the
@@ -382,6 +241,32 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
         print('❌ Error handling message status: $e');
       }
     });
+  }
+
+  bool _hasConnectedBefore = false;
+
+  // Lets the currently-open chat tell the other side it's typing. Silently
+  // a no-op if the socket isn't connected — never worth surfacing an error
+  // for what's purely a nice-to-have indicator.
+  void emitTyping(String profileWaKey) => _emitTypingState(profileWaKey, true);
+  void emitStopTyping(String profileWaKey) =>
+      _emitTypingState(profileWaKey, false);
+
+  void _emitTypingState(String profileWaKey, bool isTyping) {
+    if (!_socketReady) {
+      debugPrint('⚠️ emitTyping skipped — socket not ready yet');
+      return;
+    }
+    try {
+      _socket.emit('typing', {
+        'profile_wa_key': profileWaKey,
+        'is_typing': isTyping,
+      });
+      debugPrint('📡 emit typing: $profileWaKey is_typing=$isTyping '
+          '(socket connected=${_socket.connected})');
+    } catch (e) {
+      debugPrint('❌ Error emitting typing state: $e');
+    }
   }
 
   void handleNotification(dynamic data) {
@@ -468,8 +353,31 @@ class SocketsController extends GetxController with WidgetsBindingObserver {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       isAppInForeground.value = true; // App is in the foreground
+      // Socket is a foreground-only fast path (see the 'chatdata' listener's
+      // doc comment) — reconnect here since it was dropped on pause below.
+      // The 'connect' handler's resync (loadChatsApi) covers anything
+      // missed while disconnected.
+      try {
+        if (_socketReady && !_socket.connected) {
+          _socket.connect();
+        }
+      } catch (e) {
+        debugPrint('❌ Error reconnecting socket on resume: $e');
+      }
     } else if (state == AppLifecycleState.paused) {
       isAppInForeground.value = false; // App is in the background
+      // Drop the connection while backgrounded: nothing reads it there
+      // (FCM/APNs — not this socket — is what delivers background
+      // notifications), so holding it open would just burn battery/radio
+      // for no benefit, and iOS is stricter than Android about background
+      // network execution.
+      try {
+        if (_socketReady && _socket.connected) {
+          _socket.disconnect();
+        }
+      } catch (e) {
+        debugPrint('❌ Error disconnecting socket on pause: $e');
+      }
     }
   }
 }

@@ -240,6 +240,21 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ),
     );
 
+    // The backend can send the same incoming call over BOTH this FCM push
+    // and the always-on global-call socket (WhatsAppCallingService,
+    // GlobalCallListenerService) — that socket isn't disconnected while
+    // backgrounded the way the chat socket is, so both can independently
+    // reach showCallkitIncoming() for the same call within moments of each
+    // other, producing two CallKit prompts / a re-triggered ringtone.
+    // CallKit itself (native side) is the one source of truth both paths
+    // can check regardless of which isolate/instance got there first.
+    final alreadyShowing = await FlutterCallkitIncoming.activeCalls();
+    final alreadyShown = alreadyShowing.any((c) => c.id == safeId);
+    if (alreadyShown) {
+      debugPrint('📵 Skipping showCallkitIncoming — call $safeId already active');
+      return;
+    }
+
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
@@ -284,6 +299,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     // message (one from the OS, one from us).
     if (message.notification == null) {
       await _showBackgroundChatNotification(
+        id: chatNotificationId(chatData),
         title: chatSenderName(chatData),
         body: chatPreviewText(chatData),
       );
@@ -297,6 +313,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 // Reuses the same channel id/icon as NotificationService.showChatNotification
 // so both land in the same Android notification channel.
 Future<void> _showBackgroundChatNotification({
+  required int id,
   required String title,
   required String body,
 }) async {
@@ -324,7 +341,7 @@ Future<void> _showBackgroundChatNotification({
   );
 
   await plugin.show(
-    id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    id: id,
     title: title,
     body: body,
     notificationDetails:

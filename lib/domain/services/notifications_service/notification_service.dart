@@ -14,11 +14,9 @@ import 'package:getgabs/data/models/active_chat_model.dart';
 import 'package:getgabs/domain/controllers/dashboard/dashboard_controller.dart';
 import 'package:getgabs/domain/controllers/dashboard/messages_page/messages_page_controller.dart';
 import 'package:getgabs/domain/services/notifications_service/chat_payload_parser.dart';
-import 'package:getgabs/domain/services/notifications_service/get_server_key.dart';
 import 'package:getgabs/domain/services/remote_services/chat_service.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../../../routes/app_route.dart';
 import '../../../ui/pages/dashboard/chats/messages_ui/messages_page.dart';
 
 class NotificationService {
@@ -201,7 +199,15 @@ class NotificationService {
   // ============================================
   // UNSUBSCRIBE FROM TOPIC
   // ============================================
-  void onUnsubscribeTopic() async {
+  // Returns a Future (rather than fire-and-forget) so callers can await full
+  // completion before proceeding — e.g. logout must not call deleteToken()
+  // while this is still mid-flight, since both touch the same FCM/APNS
+  // instance on iOS and racing them can stall the platform channel.
+  // Storage-clearing and login-screen navigation are left to the caller
+  // (_handleSignOut) so logout has a single place that does them, instead
+  // of this running its own late/duplicate navigation after the caller
+  // already has.
+  Future<void> onUnsubscribeTopic() async {
     try {
       print("🔄 [onUnsubscribeTopic] Unsubscribe process started...");
       final topic = await getUserTopic();
@@ -216,8 +222,6 @@ class NotificationService {
         if (!apnsReady) {
           print(
               "⚠️ Skipping unsubscribeFromTopic on iOS because APNS token is not ready.");
-          userData.clearAllData();
-          Get.offAllNamed(AppRoute.loginWithEmail);
           return;
         }
       }
@@ -225,13 +229,8 @@ class NotificationService {
       print("📡 Unsubscribing from: $topic");
       await firebaseMessaging.unsubscribeFromTopic(topic);
       print("✅ UNSUBSCRIBED FROM TOPIC: $topic");
-
-      userData.clearAllData();
-      Get.offAllNamed(AppRoute.loginWithEmail);
     } catch (e) {
       print("❌ [onUnsubscribeTopic] Error: $e");
-      userData.clearAllData();
-      Get.offAllNamed(AppRoute.loginWithEmail);
     }
   }
 
@@ -306,6 +305,18 @@ class NotificationService {
     return null;
   }
 
+  // On a cold start, FirebaseMessaging.onMessageOpenedApp and
+  // getInitialMessage() can BOTH resolve for the exact same notification
+  // tap (a documented Firebase gotcha — see setupInteractMessage() below).
+  // Get.to() is an async transition, so if both call handleProfileNavigation
+  // back-to-back, Get.currentRoute can still read the OLD route for the
+  // second call too, pushing MessagesPage onto the stack twice for one tap.
+  // Guards only the "not yet on MessagesPage, navigate there" branch — the
+  // in-place update below (already on that chat) is idempotent and safe to
+  // run twice regardless.
+  static String? _lastNavigatedProfileWaKey;
+  static DateTime? _lastNavigatedAt;
+
   void handleProfileNavigation(Profile profile) {
     if (Get.currentRoute.contains('/MessagesPage')) {
       final MessagesPageController? messagesPageController =
@@ -328,6 +339,18 @@ class NotificationService {
             "MessagesPageController not found, navigating to new MessagesPage.");
       }
     } else {
+      final now = DateTime.now();
+      final isDuplicateTap = _lastNavigatedProfileWaKey == profile.profileWaKey &&
+          _lastNavigatedAt != null &&
+          now.difference(_lastNavigatedAt!) < const Duration(seconds: 3);
+      if (isDuplicateTap) {
+        print(
+            "Skipping duplicate navigation for profile: ${profile.profileWaKey}");
+        return;
+      }
+      _lastNavigatedProfileWaKey = profile.profileWaKey;
+      _lastNavigatedAt = now;
+
       print(
           "Navigating to new MessagesPage for profile: ${profile.profileWaKey}");
       Get.to(() =>
@@ -640,8 +663,9 @@ class NotificationService {
     // every one of these, silently swallowed as an "Unhandled Exception"
     // with no notification ever actually shown.
     final chatData = decodeChatPayload(data);
+
     _flutterLocalNotificationsPlugin.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      id: chatNotificationId(chatData),
       title: message.notification?.title ?? chatSenderName(chatData),
       body: message.notification?.body ?? chatPreviewText(chatData),
       notificationDetails: notificationDetails,
@@ -654,9 +678,6 @@ class NotificationService {
   // ============================================
   Future<String> getDeviceToken() async {
     String? token = await firebaseMessaging.getToken();
-    GetServerKey getServerKey = GetServerKey();
-    String accessToken = await getServerKey.getServerToken();
-    print(accessToken);
     print("device token: $token");
     return token ?? 'no_token_available';
   }

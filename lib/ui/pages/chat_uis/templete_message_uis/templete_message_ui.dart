@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:getgabs/ui/pages/chat_uis/document_message/document_message_ui.dart';
 import 'package:getgabs/ui/pages/chat_uis/vide_message_uis/video_message_ui.dart';
 import '../base_message_ui.dart';
 
@@ -163,6 +164,30 @@ class _TempleteMessageUiState extends State<TempleteMessageUi> {
     }
     final cleanedText = text.replaceAll(_inlineButtonMarker, '').trim();
     return {'text': cleanedText, 'buttons': buttons};
+  }
+
+  // AI-agent auto-replies attach media as a plain-text marker inside
+  // message_text rather than real WhatsApp interactive JSON, e.g.
+  // "[Document: https://.../flow_media_....pdf]\nHello! How can I help
+  // you?" — messageType is 'interactive' here but templateData is null and
+  // messageText itself isn't JSON, so none of the JSON-based header/
+  // interactive parsing above ever runs; without this the whole bracketed
+  // marker (including the raw URL) rendered as plain text. Strip it out and
+  // turn it into an actual media widget instead, same idea as
+  // extractInlineButtons above for "(Button: ...)" markers.
+  static final RegExp _inlineMediaMarker =
+      RegExp(r'\[(Document|Image|Video):\s*(https?://\S+?)\]\s*');
+
+  Map<String, dynamic> extractInlineMedia(String text) {
+    final media = <Map<String, String>>[];
+    for (final match in _inlineMediaMarker.allMatches(text)) {
+      media.add({
+        'type': match.group(1)!.toLowerCase(),
+        'url': match.group(2)!.trim(),
+      });
+    }
+    final cleanedText = text.replaceAll(_inlineMediaMarker, '').trim();
+    return {'text': cleanedText, 'media': media};
   }
 
   String getInteractivePreview(Map<String, dynamic> interactive) {
@@ -363,9 +388,12 @@ class _TempleteMessageUiState extends State<TempleteMessageUi> {
   @override
   Widget build(BuildContext context) {
     final parsedData = parseTemplateData();
-    final inline = extractInlineButtons(formatMessageText(widget.messageText));
+    final inlineMedia = extractInlineMedia(formatMessageText(widget.messageText));
+    final inline = extractInlineButtons(inlineMedia['text'] as String);
     final formattedText = inline['text'] as String;
     final inlineButtons = inline['buttons'] as List<Map<String, String>>;
+    final inlineMediaItems =
+        inlineMedia['media'] as List<Map<String, String>>;
 
     final headerText = parsedData['header'] as String;
     final bodyText = parsedData['body'] as String;
@@ -387,6 +415,7 @@ class _TempleteMessageUiState extends State<TempleteMessageUi> {
         inlineButtons.isNotEmpty ||
         imageUrl.isNotEmpty ||
         videoUrl.isNotEmpty ||
+        inlineMediaItems.isNotEmpty ||
         previewLength > 140;
     final canCollapse = !widget.isSentByMe && hasExtras;
     final collapsed = canCollapse && !_expanded;
@@ -473,6 +502,53 @@ class _TempleteMessageUiState extends State<TempleteMessageUi> {
                   color: Color(0xFFD32F2F),
                 ),
               ),
+            ),
+          for (final item in inlineMediaItems)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: item['type'] == 'document'
+                  ? DocumentMessageUi(
+                      documentFile: item['url']!,
+                      isSentByMe: widget.isSentByMe,
+                      createdAt: widget.createdAt,
+                      mediaQuery: widget.mediaQuery,
+                      rightMargin: 0,
+                      leftMargin: 0,
+                      isInTemplate: true,
+                      isLocal: false,
+                      deliveryStatus: widget.deliveryStatus,
+                    )
+                  : item['type'] == 'video'
+                      ? VideoMessageUi(
+                          videoUrl: item['url']!,
+                          isSentByMe: widget.isSentByMe,
+                          createdAt: widget.createdAt,
+                          mediaQuery: widget.mediaQuery,
+                          rightMargin: 0.0,
+                          leftMargin: 0.0,
+                          isInTemplate: true,
+                          deliveryStatus: widget.deliveryStatus,
+                        )
+                      : Image.network(
+                          item['url']!,
+                          errorBuilder: (context, error, stackTrace) =>
+                              Container(
+                            height: 150,
+                            width: double.infinity,
+                            color: Colors.grey.shade200,
+                            child: const Icon(Icons.broken_image_outlined,
+                                color: Colors.grey, size: 32),
+                          ),
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return Container(
+                              height: 150,
+                              alignment: Alignment.center,
+                              child: const CircularProgressIndicator(
+                                  strokeWidth: 2),
+                            );
+                          },
+                        ),
             ),
           if (videoUrl.isNotEmpty)
             Padding(
@@ -642,18 +718,17 @@ class _TempleteMessageUiState extends State<TempleteMessageUi> {
       } else if (header["type"] == "document" &&
           header.containsKey("document")) {
         final document = header["document"];
-        children.add(Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SelectableText("📄 Document Attached:",
-                style: TextStyle(fontWeight: FontWeight.bold)),
-            SelectableText("📎 ${document["filename"]}"),
-            TextButton(
-              onPressed: () async {},
-              child: SelectableText("🔗  Document",
-                  style: TextStyle(color: Colors.blue)),
-            ),
-          ],
+        final documentUrl = document["link"]?.toString() ?? '';
+        children.add(DocumentMessageUi(
+          documentFile: documentUrl,
+          isSentByMe: widget.isSentByMe,
+          createdAt: widget.createdAt,
+          mediaQuery: widget.mediaQuery,
+          rightMargin: 0,
+          leftMargin: 0,
+          isInTemplate: true,
+          isLocal: false,
+          deliveryStatus: widget.deliveryStatus,
         ));
       } else if (header["type"] == "image" && header.containsKey("image")) {
         children.add(Image.network(

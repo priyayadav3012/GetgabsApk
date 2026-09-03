@@ -27,6 +27,12 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Lets us prompt the user to whitelist the app from OEM battery
+         managers (Xiaomi/MIUI, Oppo/ColorOS, Vivo, some Samsung configs) —
+         without this, those managers throttle/delay FCM delivery to a
+         backgrounded or killed app, which is a common cause of chat
+         notifications arriving late on Android. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <!-- Google Play photo/video permission fix -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/>
@@ -51,9 +57,17 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize">
+            <!-- showWhenLocked/turnScreenOn used to be set here (removed) —
+                 since this whole app is a single Activity, that let the ENTIRE
+                 app (any screen, not just an incoming call) appear over the
+                 lock screen and wake the device without a PIN/pattern/biometric
+                 prompt, any time this Activity resumed while the phone was
+                 locked. Not needed for calling: flutter_callkit_incoming ships
+                 its OWN dedicated activities (CallkitIncomingActivity,
+                 TransparentActivity — see its AndroidManifest.xml) that already
+                 declare these flags themselves for the incoming-call screen
+                 specifically, independent of MainActivity. -->
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
